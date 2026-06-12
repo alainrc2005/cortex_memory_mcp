@@ -65,6 +65,68 @@ export async function scoreAndTag(content: string): Promise<ScoreResult> {
   }
 }
 
+// ─── Batch Scoring ───────────────────────────────────────────────────────────
+//
+// Envía N memorias en un ÚNICO prompt → recibe array JSON con N resultados.
+// Elimina N-1 roundtrips HTTP a Ollama y el overhead de prefill repetido.
+// Mucho más rápido que llamar scoreAndTag() N veces secuencialmente.
+//
+// Fallback: si el batch falla o el JSON está malformado, cae a scoreAndTag()
+// individual por cada memoria para garantizar resultados siempre.
+
+const BATCH_SCORE_PROMPT = (memories: string[]) =>
+  `Analiza estas ${memories.length} memorias técnicas y clasifica cada una. Responde ÚNICAMENTE con un array JSON válido, sin texto adicional, sin markdown.
+
+${memories.map((m, i) => `${i + 1}. "${m.replace(/"/g, "'")}"`).join('\n')}
+
+Array JSON requerido (exactamente ${memories.length} elementos, en el mismo orden):
+[
+  {"importance": <1-10>, "type": <"DECISION"|"CONTEXT"|"PREFERENCE"|"FACT"|"ERROR"|"PATTERN">, "tags": [<3-5 keywords>]},
+  ...
+]`
+
+export async function batchScoreAndTag(contents: string[]): Promise<ScoreResult[]> {
+  if (contents.length === 0) return []
+  if (contents.length === 1) return [await scoreAndTag(contents[0])]
+
+  try {
+    const res = await fetch(`${OLLAMA_BASE}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: SCORE_MODEL,
+        prompt: BATCH_SCORE_PROMPT(contents),
+        stream: false,
+        options: { temperature: 0.1 },
+      }),
+    })
+    if (!res.ok) throw new Error(`Ollama batch score error: ${res.status}`)
+    const data = await res.json() as { response: string }
+
+    // Extraer array JSON — puede venir con texto extra del thinking de qwen3
+    const arrayMatch = data.response.match(/\[[\s\S]*\]/)
+    if (!arrayMatch) throw new Error('No JSON array in batch response')
+
+    const parsed = JSON.parse(arrayMatch[0]) as ScoreResult[]
+    if (!Array.isArray(parsed)) throw new Error('Response is not an array')
+
+    // Normalizar cada resultado y rellenar si el array viene corto
+    return contents.map((_, i) => {
+      const r = parsed[i]
+      if (!r) return { importance: 5, type: 'FACT' as const, tags: [] }
+      return {
+        importance: Math.min(10, Math.max(1, Math.round(r.importance ?? 5))),
+        type: r.type ?? 'FACT',
+        tags: Array.isArray(r.tags) ? r.tags.slice(0, 5) : [],
+      }
+    })
+  } catch {
+    // Fallback: scoring individual por cada memoria
+    return Promise.all(contents.map(c => scoreAndTag(c)))
+  }
+}
+
+
 // ─── Cross-Encoder Rerank ────────────────────────────────────────────────────
 //
 // Evalúa (query, candidato) como par bidireccional usando el LLM.
