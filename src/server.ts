@@ -14,6 +14,7 @@ import { qdrant, searchCrossProject, searchHybridCrossProject, patchPayload, ens
 import type { SearchHit, TempMemory } from './services/qdrant.js'
 import { calcDecay, combinedScore } from './services/decay.js'
 import { createEpisode, appendEvent, getOpenSession, closeEpisode, searchEpisodes, getRecentEpisodes, episodeCollectionFor } from './services/episode.js'
+import { ensureSchema, queryNeighbors, queryTimeline, rawQuery, queryGraphContext, listEntities } from './services/kuzu.js'
 import type { Engrama } from './types/engrama.js'
 
 dotenv.config({ path: '/home/alainrc2005/IA/memory-mcp/.env' })
@@ -308,6 +309,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         required: ['projectName', 'query'],
       },
     },
+    // ── KNOWLEDGE GRAPH (v4.0) ────────────────────────────────────────────────
+    {
+      name: 'graph_neighbors',
+      description: 'Muestra las entidades directamente conectadas a una entidad en el Knowledge Graph. Sin LLM — consulta Kuzu.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectName: { type: 'string', description: 'Nombre del proyecto' },
+          entity:      { type: 'string', description: 'Nombre exacto de la entidad (ej: "PostgreSQL", "reactor-netty")' },
+          limit:       { type: 'number', description: 'Máximo de vecinos (default: 10)' },
+        },
+        required: ['projectName', 'entity'],
+      },
+    },
+    {
+      name: 'graph_timeline',
+      description: 'Muestra la evolución temporal de una entidad: qué relaciones se registraron y cuándo. Sin LLM.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectName: { type: 'string', description: 'Nombre del proyecto' },
+          entity:      { type: 'string', description: 'Nombre de la entidad' },
+          limit:       { type: 'number', description: 'Máximo de eventos (default: 20)' },
+        },
+        required: ['projectName', 'entity'],
+      },
+    },
+    {
+      name: 'graph_query',
+      description: 'Ejecuta una consulta Cypher directa sobre el Knowledge Graph (Kuzu). Para usuarios avanzados.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cypher: { type: 'string', description: 'Consulta Cypher (ej: MATCH (n:Entity) RETURN n.name LIMIT 10)' },
+        },
+        required: ['cypher'],
+      },
+    },
   ]}
 })
 
@@ -530,12 +569,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ? ['\n## 📼 Sesiones recientes', ...episodeLines].join('\n')
       : ''
 
+    // ── Bloque de Knowledge Graph: entidades relacionadas (sin LLM) ──────────
+    const keywords = searchQuery
+      .split(/\s+/)
+      .filter(w => w.length > 4)
+      .slice(0, 5)
+    const graphBlock = await queryGraphContext(keywords, projectName, 5).catch(() => '')
+
     const contextBlock = [
       `## 🧠 Memoria CORTEX — Proyecto: ${projectName}`,
       `*(${ranked.length} engramas más relevantes${rerankMap.size > 0 ? ', reranked' : ''})*`,
       '',
       ...contextLines,
       episodeBlock,
+      graphBlock,
       '',
       `> Usa este contexto como conocimiento previo. No lo repitas textualmente.`,
     ].join('\n')
@@ -1224,6 +1271,69 @@ Sé específico y conciso. Máximo 8 patrones.`
         type: 'text',
         text: `📼 ${episodes.length} sesiones relevantes para "${query}" en ${projectName}:\n\n${lines.join('\n\n')}`,
       }],
+    }
+  }
+
+  // ── graph_neighbors ────────────────────────────────────────────────────
+  if (name === 'graph_neighbors') {
+    const projectName = requireString(args, 'projectName', 'projectName')
+    const entity      = requireString(args, 'entity', 'entity')
+    const limit       = Math.min(Number(args?.limit ?? 10), 30)
+
+    await ensureSchema()
+    const rows = await queryNeighbors(entity, projectName, limit)
+
+    if (rows.length === 0) {
+      return { content: [{ type: 'text', text: `❌ No se encontró la entidad "${entity}" en el grafo de "${projectName}". Asegúrate de que existen engramas que la mencionen.` }] }
+    }
+
+    const lines = rows.map(r => {
+      const arrow = r.direction === 'out' ? `→ ${r.neighbor}` : `← ${r.neighbor}`
+      return `• [${r.relType}] ${arrow}${r.label ? ` — ${r.label}` : ''}`
+    })
+
+    return {
+      content: [{ type: 'text', text: `🕸️ Vecinos de "${entity}" en ${projectName}:\n\n${lines.join('\n')}` }],
+    }
+  }
+
+  // ── graph_timeline ────────────────────────────────────────────────────
+  if (name === 'graph_timeline') {
+    const projectName = requireString(args, 'projectName', 'projectName')
+    const entity      = requireString(args, 'entity', 'entity')
+    const limit       = Math.min(Number(args?.limit ?? 20), 50)
+
+    await ensureSchema()
+    const rows = await queryTimeline(entity, projectName, limit)
+
+    if (rows.length === 0) {
+      return { content: [{ type: 'text', text: `❌ No hay eventos en el timeline de "${entity}" en "${projectName}".` }] }
+    }
+
+    const lines = rows.map(r => {
+      const date = new Date(r.createdAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' })
+      return `• [${date}] [${r.relType}] → ${r.neighbor}${r.label ? ` — ${r.label}` : ''}`
+    })
+
+    return {
+      content: [{ type: 'text', text: `📅 Timeline de "${entity}" en ${projectName}:\n\n${lines.join('\n')}` }],
+    }
+  }
+
+  // ── graph_query ───────────────────────────────────────────────────────
+  if (name === 'graph_query') {
+    const cypher = requireString(args, 'cypher', 'cypher (consulta Cypher)')
+
+    await ensureSchema()
+    const results = await rawQuery(cypher)
+
+    if (results.length === 0) {
+      return { content: [{ type: 'text', text: '❌ La consulta no retornó resultados.' }] }
+    }
+
+    const json = JSON.stringify(results, null, 2)
+    return {
+      content: [{ type: 'text', text: `🔍 ${results.length} resultados:\n\`\`\`json\n${json.slice(0, 3000)}${json.length > 3000 ? '\n... (truncado)' : ''}\n\`\`\`` }],
     }
   }
 

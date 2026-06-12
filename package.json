@@ -7,8 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "test":  "node test_cortex.mjs",
-    "eval":  "node eval/harness.mjs"
+    "test": "node test_cortex.mjs",
+    "eval": "node eval/harness.mjs"
   },
   "dependencies": {
     "@langchain/core": "^0.2.0",
@@ -17,6 +17,7 @@
     "@qdrant/js-client-rest": "^1.9.0",
     "dotenv": "^16.4.5",
     "fastembed": "^2.1.0",
+    "kuzu": "^0.11.3",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
