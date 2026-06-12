@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables (contains sensitive config)
+.env
+
+# fastembed model cache (large binary files, auto-downloaded)
+.fastembed_cache/
+
+# Test artifacts
+*.log

@@ -1,0 +1,27 @@
+{
+  "name": "langgraph-memory-mcp",
+  "version": "3.0.0",
+  "description": "MCP Server using LangGraph to manage semantic memory in Qdrant",
+  "main": "dist/server.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test":  "node test_cortex.mjs",
+    "eval":  "node eval/harness.mjs"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.2.0",
+    "@langchain/langgraph": "^0.0.25",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@qdrant/js-client-rest": "^1.9.0",
+    "dotenv": "^16.4.5",
+    "fastembed": "^2.1.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "@types/uuid": "^9.0.8",
+    "typescript": "^5.3.3"
+  }
+}
