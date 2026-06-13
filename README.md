@@ -19,7 +19,9 @@ Built on [Model Context Protocol](https://modelcontextprotocol.io), LangGraph.js
 
 CORTEX is a **persistent semantic memory layer** for LLM-based agents. Instead of losing context between conversations, CORTEX lets your AI assistant remember decisions, facts, patterns, and past sessions — and recall them intelligently using **hybrid search** (dense + sparse BM25).
 
-Think of it as a **hippocampus for your AI**: it stores memories, consolidates duplicates, applies temporal decay so stale information fades naturally, and uses a Knowledge Graph to understand how entities relate to each other.
+Think of it as a **knowledge base with a brain**: it stores decisions, facts and patterns permanently, surfaces the most relevant ones through intelligent ranking, consolidates duplicates, and uses a Knowledge Graph to understand how entities relate to each other.
+
+> **Design principle**: In software development, memories don't expire with time. A decision made 6 months ago is still valid today. CORTEX never deletes memories due to age — it only surfaces them by relevance. The only way a memory is invalidated is when it is explicitly contradicted by a newer one (via `consolidate`).
 
 ### Why CORTEX over naive RAG?
 
@@ -150,20 +152,25 @@ flowchart TD
 - **Cross-encoder reranking** with a local LLM (qwen3) in a single batch call
 - **Cross-project search**: queries the project collection + legacy + global in one pass
 
-### Temporal Decay
-Two decay engines, chosen automatically by engrama type:
-- **Bayesian** (`DECISION`, `FACT`, `ERROR`, `PATTERN`): technical memories don't fade unless contradicted or never accessed
-- **FSRS / Ebbinghaus** (`PREFERENCE`, `CONTEXT`): conversational memories decay naturally and stabilize with repetition
+### Retrieval Priority (not expiration)
+
+> **CORTEX does not delete memories.** Decay is a **retrieval priority signal**, not a forgetting mechanism. A memory with a low decay score still exists — it simply ranks lower if a more recent and frequently accessed memory is equally relevant. If the semantic match is strong enough, any memory surfaces regardless of age.
+
+Two priority engines, chosen automatically by engrama type:
+
+- **Bayesian** (`DECISION`, `FACT`, `ERROR`, `PATTERN`): the priority of technical memories is anchored to importance and access frequency. A high-importance decision holds its position for months without being accessed. It is only *invalidated* — never deleted — when `consolidate` detects a contradiction and marks it `status: superseded`.
+
+- **FSRS-inspired** (`PREFERENCE`, `CONTEXT`): conversational context and preferences get a mild recency boost. Frequently revisited preferences gain stability. Lower-traffic ones rank below newer signals — but are never removed.
 
 ### Engrama Types
-| Type | Decay Engine | Semantic Weight | Use Case |
+| Type | Priority Engine | Semantic Weight | Use Case |
 |---|---|---|---|
 | `DECISION` | Bayesian | 55% | Architecture choices, design decisions |
 | `FACT` | Bayesian | 65% | Technical facts, API docs, config |
 | `ERROR` | Bayesian | 55% | Bugs found, anti-patterns |
 | `PATTERN` | Bayesian | 50% | Recurring behaviors detected |
-| `PREFERENCE` | FSRS | 75% | Operator style preferences |
-| `CONTEXT` | FSRS | 75% | Conversational context |
+| `PREFERENCE` | FSRS-inspired | 75% | Operator style preferences |
+| `CONTEXT` | FSRS-inspired | 75% | Conversational context |
 
 ### Episodic Memory (`start_session` / `log_event` / `recall_sessions`)
 - Tracks **work sessions** with structured event timelines
@@ -695,24 +702,44 @@ sequenceDiagram
 
 ---
 
-## 🧮 Decay Score Reference
+## 🧮 Retrieval Priority Score Reference
 
-CORTEX uses two decay engines, automatically selected by memory type:
+> **Important distinction**: CORTEX's "decay" is not biological forgetting. It is a **dynamic retrieval priority score** (0–1). A score of 0.1 does not mean the memory is gone — it means it ranks lower than a score of 0.9 in the final result list. All memories are permanent unless explicitly superseded or manually deleted.
 
-### Bayesian Decay (technical memories)
-```
-α = accessCount + importance/2
-β = max(0.1, daysSince × (10 / importance))
-score = α / (α + β)
-```
-A `DECISION` with `importance: 9` stays above 0.8 for ~60 days without any access. A low-importance fact decays within days.
+### Bayesian Priority (technical memories)
 
-### FSRS / Ebbinghaus Decay (conversational memories)
+Used for `DECISION`, `FACT`, `ERROR`, `PATTERN`.
+
 ```
-stability     = log(1 + accessCount) × (importance / 5)
-retrievability = exp(−daysSince / max(stability, 1))
+α = accessCount + importance/2   → grows with use and relevance
+β = max(0.1, daysSince × (10 / importance))  → time introduces uncertainty,
+                                               but importance resists it
+score = α / (α + β)              → E[θ] of the Beta distribution
 ```
-Mirrors human forgetting curves. Memories strengthen with each access (spaced repetition).
+
+**Example:** A `DECISION` with `importance: 9` stays above 0.85 for ~60 days
+without any access. A `FACT` with `importance: 3` drops faster — but
+still exists and will surface if semantically matched by a query.
+
+### FSRS-inspired Priority (conversational memories)
+
+Used for `PREFERENCE`, `CONTEXT`.
+
+```
+stability      = log(1 + accessCount) × (importance / 5)
+priority_score = exp(−daysSince / max(stability, 1))
+```
+
+Frequently revisited preferences gain stability and hold their rank.
+Less-accessed context fades in ranking — but remains retrievable.
+
+### Combined Score (final ranking)
+
+```
+With LLM reranker:   0.40 × semantic + 0.40 × rerank + 0.20 × priority
+Without reranker:    semantic_weight × semantic + decay_weight × priority
+                     (weights vary by engrama type — see table above)
+```
 
 ---
 
