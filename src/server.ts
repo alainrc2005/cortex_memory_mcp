@@ -71,7 +71,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       inputSchema: {
         type: 'object',
         properties: {
-          projectName: { type: 'string', description: 'Nombre del proyecto (ej: school, hotetec, nicasche)' },
+          projectName: { type: 'string', description: 'Nombre del proyecto (ej: my-api, ecommerce, backend)' },
           content: { type: 'string', description: 'El hecho, decisión o contexto a memorizar' },
         },
         required: ['projectName', 'content'],
@@ -359,7 +359,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
   // ── observe ──────────────────────────────────────────────────────────────
   if (name === 'observe') {
-    const projectName = requireString(args, 'projectName', 'projectName (ej: "school")')
+    const projectName = requireString(args, 'projectName', 'projectName (ej: "my-project")')
     const content = requireString(args, 'content', 'content (texto a memorizar)')
 
     const engramaId = uuidv4()
@@ -393,7 +393,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // ── recall ───────────────────────────────────────────────────────────────
   if (name === 'recall') {
-    const projectName = requireString(args, 'projectName', 'projectName (ej: "school")')
+    const projectName = requireString(args, 'projectName', 'projectName (ej: "my-project")')
     const query = requireString(args, 'query', 'query (texto de búsqueda)')
     const limit = Math.min(Number(args?.limit ?? 5), 20)
 
@@ -974,6 +974,7 @@ Sé específico y conciso. Máximo 8 patrones.`
     const projectName = requireString(args, 'projectName', 'projectName')
     const batchSize = Math.min(Number(args?.batchSize ?? 5), 20)
     const skipScoring = args?.skipScoring === true
+    const t0 = Date.now()
 
     const pending = await scrollTemp(projectName, 'pending', batchSize)
 
@@ -994,6 +995,7 @@ Sé específico y conciso. Máximo 8 patrones.`
         getEmbeddingBatch(contents),
         getSparseEmbeddingBatch(contents).catch(() => contents.map(() => ({ indices: [], values: [] }))),
       ])
+      log('INDEX_TEMP_EMBED_OK', { projectName, count: contents.length, ms: Date.now() - t0 })
     } catch (err) {
       // Fallback: embedding individual si el batch falla
       log('INDEX_TEMP_EMBED_FALLBACK', { error: String(err) })
@@ -1004,9 +1006,11 @@ Sé específico y conciso. Máximo 8 patrones.`
     // ── Paso 2: Scoring batch (1 sola llamada qwen3 para todo el lote) ──────────
     let scores: Array<{ importance: number, type: string, tags: string[] }> = []
     if (!skipScoring) {
+      const t1 = Date.now()
       try {
         scores = await batchScoreAndTag(contents)
-      } catch {
+        log('INDEX_TEMP_SCORE_OK', { projectName, count: contents.length, ms: Date.now() - t1 })
+      } catch (err) {
         // Fallback: defaults conservadores
         log('INDEX_TEMP_SCORE_FALLBACK', { projectName })
         scores = contents.map((_, i) => ({
@@ -1050,14 +1054,16 @@ Sé específico y conciso. Máximo 8 patrones.`
     const results: string[] = []
 
     try {
-      await qdrant.upsert(targetCol, { wait: false, points })
+      // wait:true garantiza que Qdrant confirma la escritura antes de continuar
+      const t2 = Date.now()
+      await qdrant.upsert(targetCol, { wait: true, points })
+      log('INDEX_TEMP_UPSERT_OK', { projectName, collection: targetCol, count: points.length, ms: Date.now() - t2 })
       for (let i = 0; i < pending.length; i++) {
         indexedIds.push(pending[i].id)
         results.push(`  • [${scores[i].type}] imp:${scores[i].importance}/10 — ${pending[i].content.slice(0, 70)}`)
       }
     } catch (err) {
-      // Fallback: upsert individual si el batch falla
-      log('INDEX_TEMP_UPSERT_BATCH_FALLBACK', { error: String(err) })
+      log('INDEX_TEMP_UPSERT_BATCH_ERROR', { projectName, collection: targetCol, error: String(err) })
       for (let i = 0; i < pending.length; i++) {
         const mem = pending[i]
         try {
@@ -1091,7 +1097,7 @@ Sé específico y conciso. Máximo 8 patrones.`
     const pendingCount = remaining.length > 0 ? '(aún hay pendientes — vuelve a llamar index_temp)' : '(✅ todo indexado)'
     const mode = skipScoring ? 'sin scoring LLM' : 'con scoring qwen3 (batch)'
 
-    log('INDEX_TEMP', { projectName, indexed: indexedIds.length, batchSize, skipScoring, batchMode: true })
+    log('INDEX_TEMP', { projectName, collection: targetCol, indexed: indexedIds.length, batchSize, skipScoring, batchMode: true, totalMs: Date.now() - t0 })
     return {
       content: [{
         type: 'text',

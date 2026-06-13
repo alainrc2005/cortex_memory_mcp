@@ -14,7 +14,7 @@ export const qdrant = new QdrantClient({
 
 // ─── Nombres de colecciones ──────────────────────────────────────────────────
 
-/** Colección por proyecto: cortex_school, cortex_hotetec, cortex_global, etc. */
+/** Colección por proyecto: cortex_my-api, cortex_backend, cortex_global, etc. */
 export function collectionFor(projectName: string): string {
   const safe = (projectName || 'global').toLowerCase().replace(/[^a-z0-9]/g, '_')
   return `cortex_${safe}`
