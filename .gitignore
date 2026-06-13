@@ -3,12 +3,34 @@ node_modules/
 
 # Build output
 dist/
+build/
+out/
 
 # Environment variables (contains sensitive config)
 .env
+.env.*
+!.env.example
 
 # fastembed model cache (large binary files, auto-downloaded)
 .fastembed_cache/
 
 # Test artifacts
 *.log
+coverage/
+.nyc_output/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+.eslintcache
+.turbo/
+.vercel/
+.output/

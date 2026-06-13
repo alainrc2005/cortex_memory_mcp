@@ -47,9 +47,18 @@ export async function ensureProjectCollection(projectName: string): Promise<stri
   try {
     await qdrant.getCollection(col)
   } catch {
+    // Crear con dense + sparse (BM25/IDF) desde el inicio
+    // Qdrant 1.17+: sparse_vectors debe declararse en la creación, no se puede agregar después
     await qdrant.createCollection(col, {
       vectors: { size: VECTOR_SIZE, distance: 'Cosine' },
-    })
+      sparse_vectors: {
+        [SPARSE_VECTOR_NAME]: {
+          index: { on_disk: false },
+          modifier: 'idf',
+        },
+      },
+    } as Parameters<typeof qdrant.createCollection>[1])
+    process.stderr.write(`[qdrant] Colección creada con sparse index: ${col}\n`)
   }
   return col
 }
