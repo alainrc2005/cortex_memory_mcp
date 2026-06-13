@@ -4,7 +4,7 @@ import * as fs from 'fs'
 
 // ─── Configuración ────────────────────────────────────────────────────────────
 
-const DB_PATH = path.resolve('/home/alainrc2005/IA/memory-mcp/kuzu_db')
+const DB_PATH = process.env.CORTEX_KUZU_DIR ?? path.resolve(process.cwd(), 'kuzu_db')
 
 // Singleton: una sola instancia de DB/Connection por proceso
 let _db: kuzu.Database | null = null

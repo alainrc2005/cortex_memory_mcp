@@ -15,7 +15,7 @@ import * as dotenv from 'dotenv'
 import { getEmbedding } from './fastembed.js'
 import type { Episode, EpisodeEvent, EpisodePayload } from '../types/episode.js'
 
-dotenv.config({ path: '/home/alainrc2005/IA/memory-mcp/.env' })
+dotenv.config()
 
 const VECTOR_SIZE = 384
 

@@ -1,12 +1,20 @@
-import { upsertEngrama, ensureCollection, ensureSparseIndex } from '../../../services/qdrant.js'
+import { upsertEngrama, ensureCollection, ensureSparseIndex, ensureProjectCollection, collectionFor } from '../../../services/qdrant.js'
 import { getSparseEmbedding } from '../../../services/fastembed.js'
 import type { ObserveState } from '../state.js'
 import type { EngramaPayload } from '../../../types/engrama.js'
 
 /** Nodo 5: Persiste el engrama enriquecido en Qdrant con dense + sparse vectors */
 export async function persistNode(state: ObserveState): Promise<Partial<ObserveState>> {
-  await ensureCollection()
-  await ensureSparseIndex('work_memories')  // lazy: añade BM25 index si no existe
+  // Usar colección dedicada del proyecto; fallback a work_memories si algo falla
+  const targetCol = await ensureProjectCollection(state.projectName).catch(async () => {
+    await ensureCollection()
+    return undefined as unknown as string
+  })
+
+  // Agregar índice sparse BM25 si la colección no lo tiene — falla silenciosamente
+  await ensureSparseIndex(targetCol).catch(() => {
+    process.stderr.write(`[persist] ensureSparseIndex warn en ${targetCol} — degradando a solo-dense\n`)
+  })
 
   const now = Date.now()
   const payload: EngramaPayload = {
@@ -32,7 +40,7 @@ export async function persistNode(state: ObserveState): Promise<Partial<ObserveS
     process.stderr.write('[persist] sparse embedding no disponible, guardando solo dense\n')
   }
 
-  await upsertEngrama(state.engramaId, state.embedding, payload, undefined, sparse)
+  await upsertEngrama(state.engramaId, state.embedding, payload, targetCol, sparse)
 
   return { status: 'persisted' }
 }

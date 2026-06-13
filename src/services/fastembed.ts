@@ -1,14 +1,15 @@
 import { EmbeddingModel, FlagEmbedding, SparseTextEmbedding, SparseEmbeddingModel } from 'fastembed'
 import * as dotenv from 'dotenv'
 import { mkdirSync } from 'fs'
+import * as path from 'path'
 
-dotenv.config({ path: '/home/alainrc2005/IA/memory-mcp/.env' })
+dotenv.config()
 
-// ─── Cache dir ────────────────────────────────────────────────────────────────
+// ─── Cache dir ───────────────────────────────────────────────────────────────────
 
 const CACHE_DIR =
-  process.env.FASTEMBED_CACHE_DIR ||
-  '/home/alainrc2005/IA/memory-mcp/.fastembed_cache'
+  process.env.FASTEMBED_CACHE_DIR ??
+  path.join(process.cwd(), '.fastembed_cache')
 
 try { mkdirSync(CACHE_DIR, { recursive: true }) } catch {}
 

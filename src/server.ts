@@ -5,6 +5,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import * as dotenv from 'dotenv'
 import { v4 as uuidv4 } from 'uuid'
 import { appendFileSync, mkdirSync } from 'fs'
+import * as path from 'path'
+import * as os from 'os'
 
 import { observeGraph } from './graph/observe/workflow.js'
 import { runConsolidation } from './graph/consolidate/nodes.js'
@@ -17,12 +19,13 @@ import { createEpisode, appendEvent, getOpenSession, closeEpisode, searchEpisode
 import { ensureSchema, queryNeighbors, queryTimeline, rawQuery, queryGraphContext, listEntities } from './services/kuzu.js'
 import type { Engrama } from './types/engrama.js'
 
-dotenv.config({ path: '/home/alainrc2005/IA/memory-mcp/.env' })
+dotenv.config()
 
 // ─── Logger ───────────────────────────────────────────────────────────────────
 
-const LOG_FILE = '/home/alainrc2005/IA/logs/cortex-mcp.log'
-try { mkdirSync('/home/alainrc2005/IA/logs', { recursive: true }) } catch {}
+const LOG_DIR  = process.env.CORTEX_LOG_DIR ?? path.join(os.homedir(), '.cortex', 'logs')
+const LOG_FILE = path.join(LOG_DIR, 'cortex-mcp.log')
+try { mkdirSync(LOG_DIR, { recursive: true }) } catch {}
 
 function log(event: string, data?: unknown) {
   const line = `[${new Date().toISOString()}] ${event}${data !== undefined ? ' ' + JSON.stringify(data) : ''}\n`

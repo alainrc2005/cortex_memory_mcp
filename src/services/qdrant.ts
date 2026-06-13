@@ -3,7 +3,7 @@ import * as dotenv from 'dotenv'
 import type { Engrama, EngramaPayload } from '../types/engrama.js'
 import type { SparseVector } from './fastembed.js'
 
-dotenv.config({ path: '/home/alainrc2005/IA/memory-mcp/.env' })
+dotenv.config()
 
 export const VECTOR_SIZE = 384  // all-minilm output size
 
