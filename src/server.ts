@@ -370,7 +370,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const content = requireString(args, 'content', 'content (texto a memorizar)')
 
     const engramaId = uuidv4()
-    const result = await observeGraph.invoke({
+    const rawResult = await observeGraph.invoke({
       content: content.trim(),
       projectName,
       engramaId,
@@ -382,6 +382,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       supersededIds: [],
       status: 'starting',
     })
+    const result = rawResult as unknown as import('./graph/observe/state.js').ObserveState
 
     const linksText = result.linkedTo?.length > 0
       ? `\nVinculado con ${result.linkedTo.length} memorias relacionadas.`

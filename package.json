@@ -12,8 +12,8 @@
     "longmemeval": "node eval/longmemeval_cortex.mjs"
   },
   "dependencies": {
-    "@langchain/core": "^0.2.0",
-    "@langchain/langgraph": "^0.0.25",
+    "@langchain/core": "^1.2.1",
+    "@langchain/langgraph": "^1.4.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@qdrant/js-client-rest": "^1.9.0",
     "dotenv": "^16.4.5",
