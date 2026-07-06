@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import * as dotenv from 'dotenv'
 import { v4 as uuidv4 } from 'uuid'
-import { appendFileSync, mkdirSync } from 'fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 
@@ -60,6 +60,168 @@ log('SERVER_START', { version: '3.0.0', pid: process.pid })
 // Pre-carga el modelo ONNX en background al arrancar.
 // Primera petición no paga el costo de carga (~1-3s).
 warmupEmbedding()
+
+// ─── Maintenance Scheduler ───────────────────────────────────────────────────
+// Ejecuta consolidate + detect_patterns automáticamente en background.
+// Nunca bloquea el servidor ni las peticiones del agente.
+
+const MAINT_FILE                  = path.join(os.homedir(), '.cortex', 'maintenance.json')
+const MAINT_CONSOLIDATE_INTERVAL  = 7  * 24 * 60 * 60 * 1000   // 7 días
+const MAINT_DETECT_INTERVAL       = 14 * 24 * 60 * 60 * 1000   // 14 días
+const MAINT_MIN_ENGRAMAS_CONSOL   = 25   // mínimo para que valga la pena consolidar
+const MAINT_MIN_ENGRAMAS_DETECT   = 15   // mínimo para detectar patrones
+const MAINT_CHECK_INTERVAL        = 60  * 60 * 1000             // revisar cada hora
+const MAINT_STARTUP_DELAY         = 5   * 60 * 1000             // esperar 5 min al arrancar
+
+interface MaintenanceState {
+  lastConsolidate:    Record<string, number>  // projectName → epoch ms
+  lastDetectPatterns: Record<string, number>
+}
+
+function loadMaintState(): MaintenanceState {
+  try { return JSON.parse(readFileSync(MAINT_FILE, 'utf-8')) as MaintenanceState }
+  catch { return { lastConsolidate: {}, lastDetectPatterns: {} } }
+}
+function saveMaintState(s: MaintenanceState): void {
+  try { writeFileSync(MAINT_FILE, JSON.stringify(s, null, 2)) } catch {}
+}
+
+/**
+ * Lógica central de detect_patterns: compartida entre el tool MCP y el scheduler.
+ * Recibe los engramas ya cargados para evitar doble fetch cuando viene del scheduler.
+ */
+async function autoDetectPatterns(projectName: string, allEngramas: Engrama[]): Promise<string[]> {
+  if (allEngramas.length < 5) return []
+
+  const nowMs   = Date.now()
+  const maxAge  = 30 * 24 * 60 * 60 * 1000
+  const sample  = [...allEngramas]
+    .map(e => ({
+      e,
+      score: 0.7 * Math.max(0, 1 - (nowMs - (e.lastAccessed ?? e.createdAt ?? 0)) / maxAge)
+           + 0.3 * ((e.importance ?? 5) / 10),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 50)
+    .map(x => x.e)
+
+  const contentList = sample
+    .map((e, i) => `${i + 1}. [${e.type ?? 'FACT'}] ${e.content}`)
+    .join('\n')
+
+  const prompt =
+    `Analiza estas memorias técnicas del proyecto "${projectName}" y detecta:\n` +
+    `1. Preferencias recurrentes del operador (cómo prefiere hacer las cosas)\n` +
+    `2. Patrones de trabajo habituales (flujo típico)\n` +
+    `3. Errores o problemas recurrentes\n\n` +
+    `Memorias:\n${contentList}\n\n` +
+    `Responde con una lista. Cada patrón en una línea comenzando con "- ".\n` +
+    `Sé específico y conciso. Máximo 8 patrones.`
+
+  const response = await generateText(prompt)
+  const patterns = response
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('-'))
+    .map(l => l.replace(/^-\s*/, '').trim())
+    .filter(l => l.length > 10)
+
+  if (patterns.length === 0) return []
+
+  // Guardar cada patrón como engrama PATTERN con importancia 10
+  for (const pattern of patterns) {
+    const engramaId = uuidv4()
+    const scored    = await scoreAndTag(pattern)
+    const embedding = await getEmbedding(pattern)
+    const now       = Date.now()
+    await upsertEngrama(engramaId, embedding, {
+      content: pattern, projectName, createdAt: now,
+      importance: 10, accessCount: 0, lastAccessed: now,
+      type: 'PATTERN', tags: scored.tags, linkedTo: [],
+    })
+  }
+
+  // Actualizar Operator Profile
+  const existingProfile = await getOperatorProfile()
+  const activeProjects  = existingProfile?.activeProjects ?? []
+  if (!activeProjects.includes(projectName)) activeProjects.push(projectName)
+  await saveOperatorProfile({
+    codingPreferences: patterns.filter(p =>
+      p.toLowerCase().includes('usa') ||
+      p.toLowerCase().includes('prefer') ||
+      p.toLowerCase().includes('siempre')
+    ),
+    activeProjects,
+    detectedPatterns: patterns,
+    lastUpdated: Date.now(),
+  })
+
+  return patterns
+}
+
+let maintenanceBusy = false
+
+async function runAutoMaintenance(): Promise<void> {
+  if (maintenanceBusy) { log('MAINTENANCE_SKIPPED', { reason: 'already running' }); return }
+  maintenanceBusy = true
+  log('MAINTENANCE_CYCLE_START')
+  try {
+    const state = loadMaintState()
+    const now   = Date.now()
+
+    const collections = await listCortexCollections()
+    const projects    = collections
+      .map(c => c.replace(/^cortex_/, '').replace(/_/g, '-'))
+      .filter(p => p !== 'global' && !p.startsWith('episodes') && !p.startsWith('cortex-episodes'))
+
+    for (const projectName of projects) {
+      // ── Auto-Consolidate ──────────────────────────────────────────────────
+      const lastConsol   = state.lastConsolidate[projectName] ?? 0
+      const dueConsol    = (now - lastConsol) > MAINT_CONSOLIDATE_INTERVAL
+      if (dueConsol) {
+        const engramas = await scrollAll(projectName).catch(() => [] as Engrama[])
+        if (engramas.length >= MAINT_MIN_ENGRAMAS_CONSOL) {
+          log('MAINTENANCE_CONSOLIDATE_START', { projectName, engramas: engramas.length })
+          const result = await runConsolidation(projectName)
+          state.lastConsolidate[projectName] = now
+          saveMaintState(state)
+          log('MAINTENANCE_CONSOLIDATE_DONE', { projectName, report: result.report.slice(0, 120) })
+        } else {
+          log('MAINTENANCE_CONSOLIDATE_SKIP', { projectName, reason: 'not enough engramas', count: engramas.length })
+        }
+      }
+
+      // ── Auto-Detect Patterns ──────────────────────────────────────────────
+      const lastDetect  = state.lastDetectPatterns[projectName] ?? 0
+      const dueDetect   = (now - lastDetect) > MAINT_DETECT_INTERVAL
+      if (dueDetect) {
+        const engramas = await scrollAll(projectName).catch(() => [] as Engrama[])
+        if (engramas.length >= MAINT_MIN_ENGRAMAS_DETECT) {
+          log('MAINTENANCE_DETECT_START', { projectName, engramas: engramas.length })
+          const patterns = await autoDetectPatterns(projectName, engramas)
+          state.lastDetectPatterns[projectName] = now
+          saveMaintState(state)
+          log('MAINTENANCE_DETECT_DONE', { projectName, patterns: patterns.length })
+        } else {
+          log('MAINTENANCE_DETECT_SKIP', { projectName, reason: 'not enough engramas', count: engramas.length })
+        }
+      }
+    }
+  } catch (e) {
+    log('MAINTENANCE_ERROR', { error: String(e) })
+  } finally {
+    maintenanceBusy = false
+    log('MAINTENANCE_CYCLE_END')
+  }
+}
+
+// Primera comprobación: 5 min después del arranque (servidor ya caliente).
+// Comprobaciones siguientes: cada hora.
+setTimeout(() => {
+  void runAutoMaintenance()
+  setInterval(() => { void runAutoMaintenance() }, MAINT_CHECK_INTERVAL)
+}, MAINT_STARTUP_DELAY)
+log('MAINTENANCE_SCHEDULER_REGISTERED', { startupDelayMin: 5, checkIntervalHours: 1 })
 
 const server = new Server(
   { name: 'cortex-memory', version: '3.0.0' },
@@ -618,13 +780,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 
   // ── detect_patterns (FASE 2) ──────────────────────────────────────────────
+  // La lógica central está en autoDetectPatterns() — compartida con el scheduler.
   if (name === 'detect_patterns') {
     const projectName = args?.projectName as string
-    const limit = Number(args?.limit ?? 50)
 
-    // Las colecciones se crean automáticamente al observar
     const allEngramas = await scrollAll(projectName)
-
     if (allEngramas.length < 5) {
       return {
         content: [{
@@ -634,84 +794,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
     }
 
-    // Ranking mixto: 70% recencia + 30% importancia
-    // Captura mejor el comportamiento actual vs el histórico
-    const now70 = Date.now()
-    const maxAge = 30 * 24 * 60 * 60 * 1000  // 30 días como referencia de normalización
-    const sample = [...allEngramas]
-      .map(e => {
-        const recencyScore = Math.max(0, 1 - (now70 - (e.lastAccessed ?? e.createdAt ?? 0)) / maxAge)
-        const importanceScore = (e.importance ?? 5) / 10
-        const mixedScore = 0.7 * recencyScore + 0.3 * importanceScore
-        return { e, mixedScore }
-      })
-      .sort((a, b) => b.mixedScore - a.mixedScore)
-      .slice(0, limit)
-      .map(item => item.e)
-
-    const contentList = sample.map((e, i) => `${i + 1}. [${e.type ?? 'FACT'}] ${e.content}`).join('\n')
-
-    const prompt = `Analiza estas memorias técnicas del proyecto "${projectName}" y detecta:
-1. Preferencias recurrentes del operador (cómo prefiere hacer las cosas)
-2. Patrones de trabajo habituales (flujo de trabajo típico)
-3. Errores o problemas recurrentes detectados
-
-Memorias:
-${contentList}
-
-Responde con una lista clara. Cada patrón en una línea comenzando con "- ".
-Sé específico y conciso. Máximo 8 patrones.`
-
-    const response = await generateText(prompt)
-
-    // Extraer patrones de la respuesta
-    const patterns = response
-      .split('\n')
-      .map(l => l.trim())
-      .filter(l => l.startsWith('-'))
-      .map(l => l.replace(/^-\s*/, '').trim())
-      .filter(l => l.length > 10)
+    const patterns = await autoDetectPatterns(projectName, allEngramas)
 
     if (patterns.length === 0) {
       return {
-        content: [{
-          type: 'text',
-          text: '⚠️ No se pudieron detectar patrones claros con las memorias actuales.',
-        }],
+        content: [{ type: 'text', text: '⚠️ No se pudieron detectar patrones claros con las memorias actuales.' }],
       }
     }
 
-    // Guardar cada patrón como engrama PATTERN con importancia 10
-    for (const pattern of patterns) {
-      const engramaId = uuidv4()
-      const scored = await scoreAndTag(pattern)
-      const embedding = await getEmbedding(pattern)
-      const now = Date.now()
-      await upsertEngrama(engramaId, embedding, {
-        content: pattern,
-        projectName,
-        createdAt: now,
-        importance: 10,
-        accessCount: 0,
-        lastAccessed: now,
-        type: 'PATTERN',
-        tags: scored.tags,
-        linkedTo: [],
-      })
-    }
+    // Actualizar timestamp de mantenimiento manual también
+    const state = loadMaintState()
+    state.lastDetectPatterns[projectName] = Date.now()
+    saveMaintState(state)
 
-    // P0 FIX: Actualizar Operator Profile en cortex_global
-    const existingProfile = await getOperatorProfile()
-    const activeProjects = existingProfile?.activeProjects ?? []
-    if (!activeProjects.includes(projectName)) activeProjects.push(projectName)
-    await saveOperatorProfile({
-      codingPreferences: patterns.filter(p => p.toLowerCase().includes('usa') || p.toLowerCase().includes('prefer') || p.toLowerCase().includes('siempre')),
-      activeProjects,
-      detectedPatterns: patterns,
-      lastUpdated: Date.now(),
-    })
-
-    log('OPERATOR_PROFILE_SAVED', { projectName, patterns: patterns.length })
+    log('OPERATOR_PROFILE_SAVED', { projectName, patterns: patterns.length, trigger: 'manual' })
 
     return {
       content: [{
@@ -798,6 +894,24 @@ Sé específico y conciso. Máximo 8 patrones.`
       ...tempBlock,
       '',
       `**Operator Profile**: ${profile ? `✅ (actualizado ${new Date(profile.lastUpdated).toLocaleDateString('es-MX')})` : '❌ sin generar'}`,
+      '',
+      `**🔧 Mantenimiento automático**:`,
+      ...(() => {
+        const maint = loadMaintState()
+        const now   = Date.now()
+        const lines: string[] = []
+        const projects = collections
+          .map(c => c.replace(/^cortex_/, '').replace(/_/g, '-'))
+          .filter(p => p !== 'global' && !p.startsWith('episodes'))
+        for (const p of projects) {
+          const lc = maint.lastConsolidate[p]
+          const ld = maint.lastDetectPatterns[p]
+          const consolAge = lc ? Math.round((now - lc) / 86400000) + 'd' : 'nunca'
+          const detectAge = ld ? Math.round((now - ld) / 86400000) + 'd' : 'nunca'
+          lines.push(`  · ${p}: consolidate=${consolAge} · detect_patterns=${detectAge}`)
+        }
+        return lines.length > 0 ? lines : ['  · Sin proyectos indexados aún']
+      })(),
     ].join('\n')
 
     return {
