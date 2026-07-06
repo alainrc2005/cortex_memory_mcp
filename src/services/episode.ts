@@ -3,7 +3,7 @@
  *
  * 100% local sin LLM:
  *   - Almacenamiento: Qdrant (colección por proyecto)
- *   - Embeddings:     fastembed ONNX (mismo modelo que work_memories)
+ *   - Embeddings:     fastembed ONNX (mismo modelo que colecciones cortex_*)
  *   - Resumen:        concatenación de eventos (sin Ollama)
  *
  * Colección: cortex_episodes_{projectName}

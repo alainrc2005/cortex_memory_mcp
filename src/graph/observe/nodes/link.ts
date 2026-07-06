@@ -1,4 +1,4 @@
-import { searchSimilar, patchPayload } from '../../../services/qdrant.js'
+import { searchSimilar, patchPayload, collectionFor } from '../../../services/qdrant.js'
 import type { ObserveState } from '../state.js'
 
 const LINK_THRESHOLD = 0.75  // Cosine similarity mínima para crear vínculo (calibrado para all-minilm)
@@ -14,7 +14,8 @@ export async function linkNode(state: ObserveState): Promise<Partial<ObserveStat
   }
 
   // Buscar similares en el mismo proyecto
-  const similar = await searchSimilar(state.embedding, state.projectName, LINK_LIMIT + 1)
+  const projectCol = collectionFor(state.projectName)
+  const similar = await searchSimilar(state.embedding, state.projectName, LINK_LIMIT + 1, projectCol)
 
   // Filtrar por threshold y excluir el mismo engrama si ya existe
   const candidates = similar
@@ -29,7 +30,7 @@ export async function linkNode(state: ObserveState): Promise<Partial<ObserveStat
     if (!existingLinks.includes(state.engramaId)) {
       await patchPayload(candidate.id, {
         linkedTo: [...existingLinks, state.engramaId],
-      }).catch(() => {/* no bloquear si falla un patch */})
+      }, projectCol).catch(() => {/* no bloquear si falla un patch */})
     }
   }
 

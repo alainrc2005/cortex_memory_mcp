@@ -1,6 +1,6 @@
-import { scrollAll, searchGlobal, deleteEngramas, upsertEngrama, patchPayload, collectionFor, LEGACY_COLLECTION } from '../../services/qdrant.js'
+import { scrollAll, deleteEngramas, upsertEngrama, patchPayload, collectionFor, searchSimilar } from '../../services/qdrant.js'
 import { getEmbedding } from '../../services/fastembed.js'
-import { generateText } from '../../services/ollama.js'
+import { generateText } from '../../services/llm.js'
 import { isCompressCandidate } from '../../services/decay.js'
 import { v4 as uuidv4 } from 'uuid'
 import type { Engrama, EngramaPayload } from '../../types/engrama.js'
@@ -35,7 +35,8 @@ export async function findDuplicatesNode(candidates: Engrama[]): Promise<Engrama
     if (processed.has(candidate.id)) continue
 
     const embedding = await getEmbedding(candidate.content)
-    const similar = await searchGlobal(embedding, 10)
+    const projectCol = collectionFor(candidate.projectName)
+    const similar = await searchSimilar(embedding, candidate.projectName, 10, projectCol)
 
     const duplicates = similar
       .filter(h => h.score >= DEDUPE_THRESHOLD && h.id !== candidate.id && !processed.has(h.id))
@@ -85,7 +86,7 @@ export async function mergeGroupNode(group: Engrama[]): Promise<Engrama | null> 
     linkedTo:     allLinks.filter(id => !group.map(e => e.id).includes(id)),
   }
 
-  await upsertEngrama(newId, newEmbedding, payload)
+  await upsertEngrama(newId, newEmbedding, payload, collectionFor(group[0].projectName))
   return { id: newId, ...payload }
 }
 
@@ -129,15 +130,13 @@ export async function runConsolidation(projectName: string): Promise<Consolidate
         ])
       ]
 
-      // Patch en ambas colecciones: Qdrant ignora IDs inexistentes, es seguro
       await patchPayload(engrama.id, { linkedTo: repairedLinks }, projectCol)
-      await patchPayload(engrama.id, { linkedTo: repairedLinks }, LEGACY_COLLECTION)
       repaired++
     }
 
     // ── Eliminar los originales ──────────────────────────────────────────────
     const toDelete = group.map(e => e.id)
-    await deleteEngramas(toDelete)
+    await deleteEngramas(toDelete, collectionFor(projectName))
     deleted += toDelete.length
     merged += 1
   }

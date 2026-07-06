@@ -1,15 +1,12 @@
-import { upsertEngrama, ensureCollection, ensureSparseIndex, ensureProjectCollection, collectionFor } from '../../../services/qdrant.js'
+import { upsertEngrama, ensureSparseIndex, ensureProjectCollection } from '../../../services/qdrant.js'
 import { getSparseEmbedding } from '../../../services/fastembed.js'
 import type { ObserveState } from '../state.js'
 import type { EngramaPayload } from '../../../types/engrama.js'
 
 /** Nodo 5: Persiste el engrama enriquecido en Qdrant con dense + sparse vectors */
 export async function persistNode(state: ObserveState): Promise<Partial<ObserveState>> {
-  // Usar colección dedicada del proyecto; fallback a work_memories si algo falla
-  const targetCol = await ensureProjectCollection(state.projectName).catch(async () => {
-    await ensureCollection()
-    return undefined as unknown as string
-  })
+  // Usar colección dedicada del proyecto
+  const targetCol = await ensureProjectCollection(state.projectName)
 
   // Agregar índice sparse BM25 si la colección no lo tiene — falla silenciosamente
   await ensureSparseIndex(targetCol).catch(() => {

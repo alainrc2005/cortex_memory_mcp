@@ -1,5 +1,5 @@
-import { searchSimilar } from '../../../services/qdrant.js'
-import { detectContradictions } from '../../../services/ollama.js'
+import { searchSimilar, collectionFor } from '../../../services/qdrant.js'
+import { detectContradictions } from '../../../services/llm.js'
 import { patchPayload } from '../../../services/qdrant.js'
 import type { ObserveState } from '../state.js'
 
@@ -35,10 +35,12 @@ export async function invalidateNode(state: ObserveState): Promise<Partial<Obser
   }
 
   // 1. Buscar candidatos muy similares (excluyendo el propio engrama si ya existía)
+  const projectCol = collectionFor(state.projectName)
   const similar = await searchSimilar(
     state.embedding,
     state.projectName,
     INVALIDATION_POOL,
+    projectCol,
   ).catch(() => [])
 
   const candidates = similar
@@ -68,7 +70,7 @@ export async function invalidateNode(state: ObserveState): Promise<Partial<Obser
         status: 'superseded',
         supersededBy: state.engramaId,
         supersededAt: now,
-      }),
+      }, projectCol),
     ),
   )
 

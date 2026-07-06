@@ -23,16 +23,14 @@ export function collectionFor(projectName: string): string {
 /** Colección global para Operator Profile y patrones cross-proyecto */
 export const GLOBAL_COLLECTION = 'cortex_global'
 
-// Legado: colección única donde vivían las memorias antes de Fase 3
-export const LEGACY_COLLECTION = 'work_memories'
 
 /** Buffer temporal sin LLM — recibe memorias sin embedding real hasta indexación manual */
 export const TEMP_COLLECTION = 'temp_memories'
 
 // ─── Ensure collection exists ─────────────────────────────────────────────────
 
-export async function ensureCollection(name?: string): Promise<void> {
-  const col = name || LEGACY_COLLECTION
+export async function ensureCollection(name: string): Promise<void> {
+  const col = name
   try {
     await qdrant.getCollection(col)
   } catch {
@@ -110,7 +108,8 @@ export async function upsertEngrama(
   collection?: string,
   sparse?: SparseVector,
 ): Promise<void> {
-  const col = collection || LEGACY_COLLECTION
+  if (!collection) throw new Error('upsertEngrama: collection parameter is required')
+  const col = collection
 
   // Si tenemos sparse vector, lo incluimos como named vector
   const vectors: Record<string, unknown> = sparse
@@ -136,26 +135,16 @@ export interface SearchHit {
   collection?: string
 }
 
-/** Búsqueda en una colección con filtro opcional por projectName (para legado) */
+/** Búsqueda en una colección específica */
 export async function searchSimilar(
   vector: number[],
   projectName: string,
   limit = 5,
-  collection?: string,
+  collection: string,
 ): Promise<SearchHit[]> {
-  const col = collection || LEGACY_COLLECTION
-
-  const results = await qdrant.search(col, {
+  const results = await qdrant.search(collection, {
     vector,
     limit,
-    // En colección legada: filtra por projectName O sin etiqueta
-    // En colecciones nuevas (cortex_*): sin filtro, toda la colección es del proyecto
-    filter: col === LEGACY_COLLECTION ? {
-      should: [
-        { key: 'projectName', match: { value: projectName } },
-        { is_empty: { key: 'projectName' } },
-      ],
-    } : undefined,
     with_payload: true,
   })
 
@@ -163,7 +152,7 @@ export async function searchSimilar(
     id: String(r.id),
     score: r.score,
     payload: r.payload as unknown as EngramaPayload,
-    collection: col,
+    collection,
   }))
 }
 
@@ -183,11 +172,6 @@ export async function searchCrossProject(
     results.push(...hits)
   } catch { /* colección no existe aún */ }
 
-  // Buscar en colección legada (work_memories) con filtro por proyecto
-  try {
-    const legacyHits = await searchSimilar(vector, projectName, limit, LEGACY_COLLECTION)
-    results.push(...legacyHits)
-  } catch { /* ignorar */ }
 
   // Buscar en global (patrones del operador)
   try {
@@ -204,21 +188,6 @@ export async function searchCrossProject(
     .slice(0, limit)
 }
 
-export async function searchGlobal(
-  vector: number[],
-  limit = 5,
-): Promise<SearchHit[]> {
-  const results = await qdrant.search(LEGACY_COLLECTION, {
-    vector,
-    limit,
-    with_payload: true,
-  })
-  return results.map((r) => ({
-    id: String(r.id),
-    score: r.score,
-    payload: r.payload as unknown as EngramaPayload,
-  }))
-}
 
 // ─── Hybrid Search (dense + BM25 sparse via RRF) ──────────────────────────────
 //
@@ -241,15 +210,10 @@ export async function searchHybrid(
   limit = 5,
   collection?: string,
 ): Promise<SearchHit[]> {
-  const col = collection || LEGACY_COLLECTION
+  if (!collection) throw new Error('searchHybrid: collection parameter is required')
+  const col = collection
 
-  // Filtro para colección legacy (multi-proyecto)
-  const filter = col === LEGACY_COLLECTION ? {
-    should: [
-      { key: 'projectName', match: { value: projectName } },
-      { is_empty: { key: 'projectName' } },
-    ],
-  } : undefined
+  const filter = undefined
 
   // Verificar si la colección tiene sparse index
   let hasSparse = false
@@ -319,11 +283,6 @@ export async function searchHybridCrossProject(
     results.push(...hits)
   } catch { /* colección no existe aún */ }
 
-  // Colección legada con filtro por proyecto
-  try {
-    const legacyHits = await searchHybrid(denseVec, sparseVec, projectName, limit, LEGACY_COLLECTION)
-    results.push(...legacyHits)
-  } catch { /* ignorar */ }
 
   // Colección global (patrones del operador)
   try {
@@ -348,7 +307,8 @@ export async function patchPayload(
   patch: Partial<EngramaPayload>,
   collection?: string,
 ): Promise<void> {
-  const col = collection || LEGACY_COLLECTION
+  if (!collection) throw new Error('patchPayload: collection parameter is required')
+  const col = collection
   await qdrant.setPayload(col, {
     payload: patch as Record<string, unknown>,
     points: [id],
@@ -359,12 +319,10 @@ export async function patchPayload(
 // ─── Scroll ───────────────────────────────────────────────────────────────────
 
 export async function scrollAll(projectName: string): Promise<Engrama[]> {
-  // Primero intentar colección dedicada
   const projectCol = collectionFor(projectName)
   let points: Array<{ id: string | number; payload?: Record<string, unknown> | null }> = []
 
   try {
-    await qdrant.getCollection(projectCol)
     const result = await qdrant.scroll(projectCol, {
       limit: 200,
       with_payload: true,
@@ -372,14 +330,7 @@ export async function scrollAll(projectName: string): Promise<Engrama[]> {
     })
     points = result.points
   } catch {
-    // Fallback a colección legada con filtro
-    const result = await qdrant.scroll(LEGACY_COLLECTION, {
-      filter: { must: [{ key: 'projectName', match: { value: projectName } }] },
-      limit: 200,
-      with_payload: true,
-      with_vector: false,
-    })
-    points = result.points
+    return []  // colección no existe
   }
 
   return points.map((p) => ({
@@ -438,13 +389,14 @@ export async function listCortexCollections(): Promise<string[]> {
   const result = await qdrant.getCollections()
   return result.collections
     .map(c => c.name)
-    .filter(n => n.startsWith('cortex_') || n === LEGACY_COLLECTION)
+    .filter(n => n.startsWith('cortex_'))
 }
 
 // ─── Delete ───────────────────────────────────────────────────────────────────
 
 export async function deleteEngramas(ids: string[], collection?: string): Promise<void> {
-  const col = collection || LEGACY_COLLECTION
+  if (!collection) throw new Error('deleteEngramas: collection parameter is required')
+  const col = collection
   await qdrant.delete(col, { wait: true, points: ids })
 }
 
@@ -454,7 +406,7 @@ export async function deleteAllInProject(projectName: string): Promise<number> {
   const all = await scrollAll(projectName)
   if (all.length === 0) return 0
   const ids = all.map(e => e.id).filter(Boolean) as string[]
-  const col = LEGACY_COLLECTION  // por ahora todo está en legado
+  const col = collectionFor(projectName)
   await qdrant.delete(col, { wait: true, points: ids })
   return ids.length
 }

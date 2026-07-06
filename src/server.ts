@@ -11,8 +11,8 @@ import * as os from 'os'
 import { observeGraph } from './graph/observe/workflow.js'
 import { runConsolidation } from './graph/consolidate/nodes.js'
 import { warmupEmbedding, getEmbedding, getSparseEmbedding, getEmbeddingBatch, getSparseEmbeddingBatch } from './services/fastembed.js'
-import { generateText, scoreAndTag, batchScoreAndTag, rerankWithLLM } from './services/ollama.js'
-import { qdrant, searchCrossProject, searchHybridCrossProject, patchPayload, ensureCollection, upsertEngrama, scrollAll, getOperatorProfile, saveOperatorProfile, listCortexCollections, deleteEngramas, deleteAllInProject, exportProject, upsertTemp, scrollTemp, searchTempByKeyword, deleteTempIds, ensureProjectCollection, TEMP_COLLECTION } from './services/qdrant.js'
+import { generateText, scoreAndTag, batchScoreAndTag, rerankWithLLM } from './services/llm.js'
+import { qdrant, searchCrossProject, searchHybridCrossProject, patchPayload, upsertEngrama, scrollAll, getOperatorProfile, saveOperatorProfile, listCortexCollections, deleteEngramas, deleteAllInProject, exportProject, upsertTemp, scrollTemp, searchTempByKeyword, deleteTempIds, ensureProjectCollection, TEMP_COLLECTION } from './services/qdrant.js'
 import type { SearchHit, TempMemory } from './services/qdrant.js'
 import { calcDecay, combinedScore } from './services/decay.js'
 import { createEpisode, appendEvent, getOpenSession, closeEpisode, searchEpisodes, getRecentEpisodes, episodeCollectionFor } from './services/episode.js'
@@ -20,6 +20,10 @@ import { ensureSchema, queryNeighbors, queryTimeline, rawQuery, queryGraphContex
 import type { Engrama } from './types/engrama.js'
 
 dotenv.config()
+
+// ─── Feature flags ──────────────────────────────────────────────────
+// false por defecto: en CPU el cross-encoder Ollama bloquea 90-130s por llamada
+const RERANKER_ENABLED = process.env.CORTEX_RERANKER_ENABLED === 'true'
 
 // ─── Logger ───────────────────────────────────────────────────────────────────
 
@@ -244,7 +248,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'index_temp',
-      description: 'Indexa memorias de temp_memories hacia work_memories con embedding ONNX (fastembed) y scoring LLM (qwen3). Llamar manualmente cuando haya CPU disponible. Procesa en lotes controlados.',
+      description: 'Indexa memorias de temp_memories hacia la colección del proyecto (cortex_*) con embedding ONNX (fastembed) y scoring LLM. Llamar manualmente cuando haya CPU disponible. Procesa en lotes controlados.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -257,7 +261,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     },
     {
       name: 'recall_hybrid',
-      description: 'Busca memorias en ambas colecciones: keyword en temp_memories (sin LLM) + semántica en work_memories (fastembed). Ideal para encontrar lo que guardaste recientemente en el buffer.',
+      description: 'Busca memorias en ambas fuentes: keyword en temp_memories (buffer, sin LLM) + semántica en la colección del proyecto (fastembed). Ideal para encontrar lo que guardaste recientemente.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -420,12 +424,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       .filter(e => e.status !== 'superseded')  // excluir memorias invalidadas
 
     // ── Cross-encoder reranking (batch, una sola llamada Ollama) ────────────────
+    // Controlado por CORTEX_RERANKER_ENABLED en .env (false = skip, usa solo fastembed)
     const rerankMap = new Map<string, number>()
-    if (hybridHits.length >= 3) {
+    if (RERANKER_ENABLED && hybridHits.length >= 3) {
       const candidates = engramas.map(e => ({ id: e.id, content: e.content ?? '' }))
       const rerankResults = await rerankWithLLM(query, candidates)
       for (const r of rerankResults) rerankMap.set(r.id, r.rerankScore)
       log('RECALL_RERANK', { query: query.slice(0, 60), candidates: candidates.length })
+    } else if (!RERANKER_ENABLED) {
+      log('RECALL_RERANK_SKIPPED', { reason: 'CORTEX_RERANKER_ENABLED=false' })
     }
 
     const ranked = engramas
@@ -471,7 +478,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // ── consolidate ──────────────────────────────────────────────────────────
   if (name === 'consolidate') {
     const projectName = args?.projectName as string
-    await ensureCollection()
+    // La colección del proyecto se crea automáticamente si no existe
     const result = await runConsolidation(projectName)
     return {
       content: [{
@@ -492,13 +499,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     log('GET_CONTEXT_FOR', { projectName, query: searchQuery.slice(0, 80) })
 
-    await ensureCollection()
+    // Las colecciones se crean automáticamente al observar
     // Dense + sparse en paralelo para no añadir latencia secuencial
     const [queryEmbedding, sparseVecCtx] = await Promise.all([
       getEmbedding(searchQuery),
       getSparseEmbedding(searchQuery).catch(() => ({ indices: [], values: [] })),
     ])
-    // Búsqueda híbrida cross-project (BM25+dense, coleción propia + legado + global)
+    // Búsqueda híbrida cross-project (BM25+dense, colección propia + global)
     const hits = await searchHybridCrossProject(queryEmbedding, sparseVecCtx, projectName, maxItems * 2)
 
     if (hits.length === 0) {
@@ -516,11 +523,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       .filter(e => e.status !== 'superseded')  // excluir memorias invalidadas
 
     // ── Cross-encoder reranking (batch, una sola llamada Ollama) ────────────────
+    // Controlado por CORTEX_RERANKER_ENABLED en .env (false = skip, usa solo fastembed)
     const rerankMap = new Map<string, number>()
-    if (hits.length >= 3) {
+    if (RERANKER_ENABLED && hits.length >= 3) {
       const candidates = engramas.map(e => ({ id: e.id, content: e.content ?? '' }))
       const rerankResults = await rerankWithLLM(searchQuery, candidates)
       for (const r of rerankResults) rerankMap.set(r.id, r.rerankScore)
+      log('GET_CONTEXT_RERANK', { query: searchQuery.slice(0, 60), candidates: candidates.length })
+    } else if (!RERANKER_ENABLED) {
+      log('GET_CONTEXT_RERANK_SKIPPED', { reason: 'CORTEX_RERANKER_ENABLED=false' })
     }
 
     const ranked = engramas
@@ -610,7 +621,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const projectName = args?.projectName as string
     const limit = Number(args?.limit ?? 50)
 
-    await ensureCollection()
+    // Las colecciones se crean automáticamente al observar
     const allEngramas = await scrollAll(projectName)
 
     if (allEngramas.length < 5) {
@@ -1129,7 +1140,7 @@ Sé específico y conciso. Máximo 8 patrones.`
       })
     }
 
-    // 2. Búsqueda semántica en work_memories (fastembed ONNX)
+    // 2. Búsqueda semántica en colección del proyecto (fastembed ONNX)
     try {
       const queryEmbedding = await getEmbedding(query)
       const semanticHits: SearchHit[] = await searchCrossProject(queryEmbedding, projectName, limit * 2)

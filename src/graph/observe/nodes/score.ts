@@ -1,4 +1,4 @@
-import { scoreAndTag } from '../../../services/ollama.js'
+import { scoreAndTag } from '../../../services/llm.js'
 import type { ObserveState } from '../state.js'
 
 /** Nodo 1: Puntúa el contenido con qwen3:8b → importance, type, tags */

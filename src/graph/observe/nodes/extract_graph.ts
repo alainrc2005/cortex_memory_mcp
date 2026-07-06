@@ -1,4 +1,4 @@
-import { generateText } from '../../../services/ollama.js'
+import { generateText } from '../../../services/llm.js'
 import { upsertEntities, upsertRelations, ensureSchema } from '../../../services/kuzu.js'
 import type { ObserveState } from '../state.js'
 
