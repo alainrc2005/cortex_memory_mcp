@@ -201,7 +201,42 @@ El agente debe llamar `cortex_status` y responder con las colecciones activas.
 
 ---
 
-## Paso 7 — Configurar el proyecto en tu workspace
+## Paso 7 — Instalar el SKILL.md (instrucciones del agente)
+
+Esta es la pieza más importante para que tu agente AI sepa **cómo usar CORTEX**.
+Sin este archivo, el servidor corre pero el agente no sabrá:
+- Hacer el cold start automático al inicio de cada sesión
+- Ejecutar el hook post-turno (`quick_observe`)
+- Detectar el proyecto activo desde `.project`
+
+El archivo `skill/SKILL.md` que viene en este repo contiene todas las instrucciones.
+Cópialo a la carpeta de skills de tu cliente AI:
+
+### Antigravity
+
+```bash
+# Crear la carpeta del skill
+mkdir -p ~/.gemini/config/skills/memory_manager
+
+# Copiar el SKILL.md del repo
+cp /ruta/al/repo/skill/SKILL.md ~/.gemini/config/skills/memory_manager/SKILL.md
+```
+
+### Claude Desktop / Cursor / otro cliente compatible con skills
+
+Consulta la documentación de tu cliente para saber dónde instalar archivos de skill/instrucciones del sistema.
+El contenido de `skill/SKILL.md` debe quedar accesible para el agente como contexto de sistema.
+
+### Verificar que el skill está activo
+
+En tu próxima conversación, el agente debería:
+1. Leer el `.project` de tu workspace automáticamente
+2. Llamar `get_context_for` y `get_operator_profile` al inicio
+3. Guardar hechos importantes con `quick_observe` al final de cada turno
+
+---
+
+## Paso 8 — Configurar el proyecto en tu workspace
 
 Para que el cold start automático funcione correctamente, crea un archivo `.project`
 en la raíz de cada directorio de trabajo:
@@ -310,6 +345,13 @@ cp .env.example .env
 npm run build && npm start
 
 # 5. Configurar cliente MCP con la ruta absoluta a dist/server.js
+
+# 6. Instalar SKILL.md para que el agente sepa usar CORTEX
+mkdir -p ~/.gemini/config/skills/memory_manager
+cp skill/SKILL.md ~/.gemini/config/skills/memory_manager/SKILL.md
+
+# 7. Crear .project en cada workspace de proyecto
+echo '{"name": "mi-proyecto", "workspace": "'$(pwd)'"}' > /ruta/al/proyecto/.project
 ```
 
 ---
