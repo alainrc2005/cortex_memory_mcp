@@ -5,8 +5,13 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import * as dotenv from 'dotenv'
 import { v4 as uuidv4 } from 'uuid'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { createRequire } from 'module'
 import * as path from 'path'
 import * as os from 'os'
+
+// Lee la versión una sola vez desde package.json — fuente de verdad única
+const _require = createRequire(import.meta.url)
+const PKG_VERSION: string = (_require('../package.json') as { version: string }).version
 
 import { observeGraph } from './graph/observe/workflow.js'
 import { runConsolidation } from './graph/consolidate/nodes.js'
@@ -55,7 +60,7 @@ function errorResponse(msg: string, detail?: string) {
 
 // ─── MCP Server ───────────────────────────────────────────────────────────────
 
-log('SERVER_START', { version: '3.0.0', pid: process.pid })
+log('SERVER_START', { version: PKG_VERSION, pid: process.pid })
 
 // Pre-carga el modelo ONNX en background al arrancar.
 // Primera petición no paga el costo de carga (~1-3s).
@@ -384,7 +389,7 @@ log('MAINTENANCE_SCHEDULER_REGISTERED', {
 })
 
 const server = new Server(
-  { name: 'cortex-memory', version: '3.0.0' },
+  { name: 'cortex-memory', version: PKG_VERSION },
   { capabilities: { tools: {} } },
 )
 
@@ -1050,7 +1055,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     const statusBlock = [
       `## 🧠 CORTEX Status`,
-      `*v2.1.0 — LangGraph.js + Qdrant + fastembed*`,
+      `*v${PKG_VERSION} — LangGraph.js + Qdrant + fastembed*`,
       '',
       `**Colecciones activas**: ${collections.length}`,
       ...stats,
