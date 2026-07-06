@@ -70,17 +70,20 @@ const MAINT_CONSOLIDATE_INTERVAL  = 7  * 24 * 60 * 60 * 1000   // 7 días
 const MAINT_DETECT_INTERVAL       = 14 * 24 * 60 * 60 * 1000   // 14 días
 const MAINT_MIN_ENGRAMAS_CONSOL   = 25   // mínimo para que valga la pena consolidar
 const MAINT_MIN_ENGRAMAS_DETECT   = 15   // mínimo para detectar patrones
+const MAINT_INDEX_BATCH_SIZE      = 10   // memorias del buffer a indexar por proyecto por ciclo
 const MAINT_CHECK_INTERVAL        = 60  * 60 * 1000             // revisar cada hora
 const MAINT_STARTUP_DELAY         = 5   * 60 * 1000             // esperar 5 min al arrancar
+const MAINT_INDEX_STARTUP_DELAY   = 60  * 1000                  // indexar buffer en 60s al arrancar
 
 interface MaintenanceState {
   lastConsolidate:    Record<string, number>  // projectName → epoch ms
   lastDetectPatterns: Record<string, number>
+  lastIndexTemp:      Record<string, number>  // projectName → epoch ms del último auto-index
 }
 
 function loadMaintState(): MaintenanceState {
   try { return JSON.parse(readFileSync(MAINT_FILE, 'utf-8')) as MaintenanceState }
-  catch { return { lastConsolidate: {}, lastDetectPatterns: {} } }
+  catch { return { lastConsolidate: {}, lastDetectPatterns: {}, lastIndexTemp: {} } }
 }
 function saveMaintState(s: MaintenanceState): void {
   try { writeFileSync(MAINT_FILE, JSON.stringify(s, null, 2)) } catch {}
@@ -159,6 +162,127 @@ async function autoDetectPatterns(projectName: string, allEngramas: Engrama[]): 
   return patterns
 }
 
+/**
+ * Auto-indexa las memorias pendientes del buffer (temp_memories) de un proyecto.
+ * Compartida entre el tool MCP index_temp y el MaintenanceScheduler.
+ *
+ * @param projectName  Proyecto a indexar
+ * @param batchSize    Memorias a procesar en este ciclo (default: MAINT_INDEX_BATCH_SIZE)
+ * @param skipScoring  true = sin LLM (más rápido); false = con scoring qwen3 (mejor calidad)
+ * @returns número de memorias indexadas
+ */
+async function autoIndexTemp(projectName: string, batchSize = MAINT_INDEX_BATCH_SIZE, skipScoring = false): Promise<number> {
+  const pending = await scrollTemp(projectName, 'pending', batchSize)
+  if (pending.length === 0) return 0
+
+  const targetCol = await ensureProjectCollection(projectName)
+  const contents  = pending.map(m => m.content)
+
+  // Paso 1: Embeddings en batch
+  let denseVecs: number[][] = []
+  let sparseVecs: Array<{ indices: number[], values: number[] }> = []
+  try {
+    ;[denseVecs, sparseVecs] = await Promise.all([
+      getEmbeddingBatch(contents),
+      getSparseEmbeddingBatch(contents).catch(() => contents.map(() => ({ indices: [], values: [] }))),
+    ])
+  } catch {
+    denseVecs  = await Promise.all(contents.map(c => getEmbedding(c)))
+    sparseVecs = contents.map(() => ({ indices: [], values: [] }))
+  }
+
+  // Paso 2: Scoring opcional
+  let scores: Array<{ importance: number, type: string, tags: string[] }>
+  if (!skipScoring) {
+    try { scores = await batchScoreAndTag(contents) }
+    catch { scores = pending.map(m => ({ importance: m.importance ?? 5, type: m.type ?? 'FACT', tags: m.tags ?? [] })) }
+  } else {
+    scores = pending.map(m => ({ importance: m.importance ?? 5, type: m.type ?? 'FACT', tags: m.tags ?? [] }))
+  }
+
+  // Paso 3: Upsert en Qdrant (batch)
+  const now    = Date.now()
+  const points = pending.map((mem, i) => ({
+    id:      mem.id,
+    vector:  sparseVecs[i]?.indices?.length
+      ? ({ '': denseVecs[i], bm25: sparseVecs[i] } as unknown as number[])
+      : denseVecs[i],
+    payload: {
+      content: mem.content, projectName,
+      createdAt: mem.createdAt ?? now, importance: scores[i].importance,
+      accessCount: 0, lastAccessed: now,
+      type: scores[i].type, tags: scores[i].tags, linkedTo: [],
+    } as Record<string, unknown>,
+  }))
+
+  const indexedIds: string[] = []
+  try {
+    await qdrant.upsert(targetCol, { wait: true, points })
+    indexedIds.push(...pending.map(m => m.id))
+  } catch {
+    // Fallback individual
+    for (let i = 0; i < pending.length; i++) {
+      const sparseArg = sparseVecs[i]?.indices?.length ? sparseVecs[i] : undefined
+      try {
+        await upsertEngrama(pending[i].id, denseVecs[i], {
+          content: pending[i].content, projectName,
+          createdAt: pending[i].createdAt ?? now, importance: scores[i].importance,
+          accessCount: 0, lastAccessed: now,
+          type: scores[i].type as Engrama['type'], tags: scores[i].tags, linkedTo: [],
+        }, targetCol, sparseArg)
+        indexedIds.push(pending[i].id)
+      } catch { /* log ya en el caller */ }
+    }
+  }
+
+  // Limpiar del buffer los indexados
+  if (indexedIds.length > 0) await deleteTempIds(indexedIds)
+
+  return indexedIds.length
+}
+
+/**
+ * Indexa TODO el buffer pendiente, recorriendo TODOS los proyectos.
+ * Para el arranque del servidor (rescata memorias huérfanas de sesiones anteriores).
+ */
+async function autoIndexAllPending(): Promise<void> {
+  log('MAINTENANCE_INDEX_ALL_START')
+  try {
+    // scrollTemp sin projectName trae todo
+    const allPending = await scrollTemp(undefined, 'pending', 500)
+    if (allPending.length === 0) {
+      log('MAINTENANCE_INDEX_ALL_EMPTY')
+      return
+    }
+    // Agrupar por proyecto
+    const byProject = new Map<string, number>()
+    for (const m of allPending) byProject.set(m.projectName, (byProject.get(m.projectName) ?? 0) + 1)
+    log('MAINTENANCE_INDEX_ALL_FOUND', {
+      total: allPending.length,
+      projects: Object.fromEntries(byProject),
+    })
+    const state = loadMaintState()
+    const now   = Date.now()
+    for (const [projectName, count] of byProject.entries()) {
+      log('MAINTENANCE_INDEX_PROJECT_START', { projectName, count })
+      // Procesar en lotes de MAINT_INDEX_BATCH_SIZE hasta vaciar el buffer
+      let remaining = count
+      while (remaining > 0) {
+        const indexed = await autoIndexTemp(projectName, MAINT_INDEX_BATCH_SIZE, false)
+        if (indexed === 0) break   // sin progreso, evitar loop infinito
+        remaining -= indexed
+        log('MAINTENANCE_INDEX_PROJECT_BATCH', { projectName, indexed, remaining })
+      }
+      state.lastIndexTemp = state.lastIndexTemp ?? {}
+      state.lastIndexTemp[projectName] = now
+    }
+    saveMaintState(state)
+    log('MAINTENANCE_INDEX_ALL_DONE', { projects: byProject.size, total: allPending.length })
+  } catch (e) {
+    log('MAINTENANCE_INDEX_ALL_ERROR', { error: String(e) })
+  }
+}
+
 let maintenanceBusy = false
 
 async function runAutoMaintenance(): Promise<void> {
@@ -168,6 +292,26 @@ async function runAutoMaintenance(): Promise<void> {
   try {
     const state = loadMaintState()
     const now   = Date.now()
+
+    // ── Paso 0: Auto-Index del buffer (SIEMPRE, antes de consolidar) ───────────
+    // Si hay memorias pendientes en temp_memories, las indexamos primero.
+    // Así consolidate las verá en este mismo ciclo.
+    const allPending = await scrollTemp(undefined, 'pending', 500)
+    if (allPending.length > 0) {
+      const byProject = new Map<string, number>()
+      for (const m of allPending) byProject.set(m.projectName, (byProject.get(m.projectName) ?? 0) + 1)
+      log('MAINTENANCE_INDEX_PENDING', { total: allPending.length, projects: byProject.size })
+      state.lastIndexTemp = state.lastIndexTemp ?? {}
+      for (const [projectName] of byProject.entries()) {
+        // Indexar hasta MAINT_INDEX_BATCH_SIZE memorias por proyecto (sin bloquear demasiado)
+        const indexed = await autoIndexTemp(projectName, MAINT_INDEX_BATCH_SIZE, false).catch(() => 0)
+        if (indexed > 0) {
+          state.lastIndexTemp[projectName] = now
+          log('MAINTENANCE_INDEX_DONE', { projectName, indexed })
+        }
+      }
+      saveMaintState(state)
+    }
 
     const collections = await listCortexCollections()
     const projects    = collections
@@ -215,13 +359,29 @@ async function runAutoMaintenance(): Promise<void> {
   }
 }
 
-// Primera comprobación: 5 min después del arranque (servidor ya caliente).
-// Comprobaciones siguientes: cada hora.
+// Bootstrap de mantenimiento — dos relojes independientes:
+//
+//   1. Auto-index del buffer: arranca en 60s (el servidor ya está caliente,
+//      rescata memorias huérfanas de sesiones anteriores).
+//
+//   2. Ciclo completo (index + consolidate + detect_patterns):
+//      arranca a los 5 min y luego cada hora. Usa un timer independiente
+//      para no cancelarse si autoIndexAllPending() tarda.
+
+setTimeout(() => {
+  void autoIndexAllPending()    // rescate inmediato del buffer
+}, MAINT_INDEX_STARTUP_DELAY)
+
 setTimeout(() => {
   void runAutoMaintenance()
   setInterval(() => { void runAutoMaintenance() }, MAINT_CHECK_INTERVAL)
 }, MAINT_STARTUP_DELAY)
-log('MAINTENANCE_SCHEDULER_REGISTERED', { startupDelayMin: 5, checkIntervalHours: 1 })
+
+log('MAINTENANCE_SCHEDULER_REGISTERED', {
+  indexBufferDelaySeconds: 60,
+  fullCycleStartupDelayMinutes: 5,
+  fullCycleIntervalHours: 1,
+})
 
 const server = new Server(
   { name: 'cortex-memory', version: '3.0.0' },
@@ -881,7 +1041,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     const tempBlock = allPending.length > 0
-      ? [`**Buffer temporal (temp_memories)**: ⏳ ${allPending.length} pendiente${allPending.length !== 1 ? 's' : ''} de indexar`, ...tempLines]
+      ? [
+          `**Buffer temporal (temp_memories)**: ⏳ ${allPending.length} pendiente${allPending.length !== 1 ? 's' : ''} de indexar`,
+          `  _(el scheduler los indexará automáticamente — próximo ciclo: ~60s si acaba de arrancar, o en el siguiente ciclo horario)_`,
+          ...tempLines,
+        ]
       : [`**Buffer temporal (temp_memories)**: ✅ vacío`]
 
     const statusBlock = [
@@ -906,13 +1070,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         for (const p of projects) {
           const lc = maint.lastConsolidate[p]
           const ld = maint.lastDetectPatterns[p]
+          const li = (maint.lastIndexTemp ?? {})[p]
           const consolAge = lc ? Math.round((now - lc) / 86400000) + 'd' : 'nunca'
           const detectAge = ld ? Math.round((now - ld) / 86400000) + 'd' : 'nunca'
-          lines.push(`  · ${p}: consolidate=${consolAge} · detect_patterns=${detectAge}`)
+          const indexAge  = li ? Math.round((now - li) / 3600000) + 'h' : 'nunca'
+          lines.push(`  · ${p}: index_temp=${indexAge} · consolidate=${consolAge} · detect=${detectAge}`)
         }
         return lines.length > 0 ? lines : ['  · Sin proyectos indexados aún']
       })(),
     ].join('\n')
+
 
     return {
       content: [{ type: 'text', text: statusBlock }],
@@ -1101,137 +1268,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // Speedup vs versión anterior (secuencial N×): ~3-8× dependiendo del batchSize.
   if (name === 'index_temp') {
     const projectName = requireString(args, 'projectName', 'projectName')
-    const batchSize = Math.min(Number(args?.batchSize ?? 5), 20)
+    const batchSize   = Math.min(Number(args?.batchSize ?? 5), 20)
     const skipScoring = args?.skipScoring === true
     const t0 = Date.now()
 
-    const pending = await scrollTemp(projectName, 'pending', batchSize)
-
-    if (pending.length === 0) {
+    // Verificar si hay pendientes antes de llamar autoIndexTemp
+    const before = await scrollTemp(projectName, 'pending', batchSize)
+    if (before.length === 0) {
       return {
         content: [{ type: 'text', text: `✅ No hay memorias pendientes en "${projectName}". Todo está indexado.` }],
       }
     }
 
-    const targetCol = await ensureProjectCollection(projectName)
-    const contents = pending.map(m => m.content)
+    // Delegar en la lógica compartida con el scheduler
+    const indexed = await autoIndexTemp(projectName, batchSize, skipScoring)
 
-    // ── Paso 1: Embeddings en batch (ONNX — 1 sola llamada para todo el lote) ──
-    let denseVecs: number[][] = []
-    let sparseVecs: Array<{ indices: number[], values: number[] }> = []
-    try {
-      ;[denseVecs, sparseVecs] = await Promise.all([
-        getEmbeddingBatch(contents),
-        getSparseEmbeddingBatch(contents).catch(() => contents.map(() => ({ indices: [], values: [] }))),
-      ])
-      log('INDEX_TEMP_EMBED_OK', { projectName, count: contents.length, ms: Date.now() - t0 })
-    } catch (err) {
-      // Fallback: embedding individual si el batch falla
-      log('INDEX_TEMP_EMBED_FALLBACK', { error: String(err) })
-      denseVecs = await Promise.all(contents.map(c => getEmbedding(c)))
-      sparseVecs = contents.map(() => ({ indices: [], values: [] }))
-    }
+    // Actualizar timestamp en maintenance.json también para llamadas manuales
+    const state = loadMaintState()
+    state.lastIndexTemp = state.lastIndexTemp ?? {}
+    state.lastIndexTemp[projectName] = Date.now()
+    saveMaintState(state)
 
-    // ── Paso 2: Scoring batch (1 sola llamada qwen3 para todo el lote) ──────────
-    let scores: Array<{ importance: number, type: string, tags: string[] }> = []
-    if (!skipScoring) {
-      const t1 = Date.now()
-      try {
-        scores = await batchScoreAndTag(contents)
-        log('INDEX_TEMP_SCORE_OK', { projectName, count: contents.length, ms: Date.now() - t1 })
-      } catch (err) {
-        // Fallback: defaults conservadores
-        log('INDEX_TEMP_SCORE_FALLBACK', { projectName })
-        scores = contents.map((_, i) => ({
-          importance: pending[i].importance ?? 5,
-          type: pending[i].type ?? 'FACT',
-          tags: pending[i].tags ?? [],
-        }))
-      }
-    } else {
-      scores = contents.map((_, i) => ({
-        importance: pending[i].importance ?? 5,
-        type: pending[i].type ?? 'FACT',
-        tags: pending[i].tags ?? [],
-      }))
-    }
+    const remaining    = await scrollTemp(projectName, 'pending', 1)
+    const pendingNote  = remaining.length > 0 ? '⏳ Aún hay pendientes — vuelve a llamar index_temp o el scheduler los indexará automáticamente.' : '✅ Todo indexado.'
+    const mode         = skipScoring ? 'sin scoring LLM' : 'con scoring qwen3 (batch)'
+    const elapsed      = Date.now() - t0
 
-    // ── Paso 3: Upsert batch en Qdrant (wait:false → no bloqueamos por cada punto) ──
-    const now = Date.now()
-    const points = pending.map((mem, i) => ({
-      id: mem.id,
-      vector: sparseVecs[i]?.indices?.length
-        ? {
-            '': denseVecs[i],
-            'bm25': sparseVecs[i],
-          } as unknown as number[]
-        : denseVecs[i],
-      payload: {
-        content: mem.content,
-        projectName,
-        createdAt: mem.createdAt ?? now,
-        importance: scores[i].importance,
-        accessCount: 0,
-        lastAccessed: now,
-        type: scores[i].type,
-        tags: scores[i].tags,
-        linkedTo: [],
-      } as Record<string, unknown>,
-    }))
-
-    const indexedIds: string[] = []
-    const results: string[] = []
-
-    try {
-      // wait:true garantiza que Qdrant confirma la escritura antes de continuar
-      const t2 = Date.now()
-      await qdrant.upsert(targetCol, { wait: true, points })
-      log('INDEX_TEMP_UPSERT_OK', { projectName, collection: targetCol, count: points.length, ms: Date.now() - t2 })
-      for (let i = 0; i < pending.length; i++) {
-        indexedIds.push(pending[i].id)
-        results.push(`  • [${scores[i].type}] imp:${scores[i].importance}/10 — ${pending[i].content.slice(0, 70)}`)
-      }
-    } catch (err) {
-      log('INDEX_TEMP_UPSERT_BATCH_ERROR', { projectName, collection: targetCol, error: String(err) })
-      for (let i = 0; i < pending.length; i++) {
-        const mem = pending[i]
-        try {
-          const sparseArg = sparseVecs[i]?.indices?.length ? sparseVecs[i] : undefined
-          await upsertEngrama(mem.id, denseVecs[i], {
-            content: mem.content,
-            projectName,
-            createdAt: mem.createdAt ?? now,
-            importance: scores[i].importance,
-            accessCount: 0,
-            lastAccessed: now,
-            type: scores[i].type as any,
-            tags: scores[i].tags,
-            linkedTo: [],
-          }, targetCol, sparseArg)
-          indexedIds.push(mem.id)
-          results.push(`  • [${scores[i].type}] imp:${scores[i].importance}/10 — ${mem.content.slice(0, 70)}`)
-        } catch (e2) {
-          const msg = e2 instanceof Error ? e2.message : String(e2)
-          results.push(`  ❌ Error indexando ${mem.id}: ${msg.slice(0, 80)}`)
-        }
-      }
-    }
-
-    // Eliminar de temp los que se indexaron exitosamente
-    if (indexedIds.length > 0) {
-      await deleteTempIds(indexedIds)
-    }
-
-    const remaining = await scrollTemp(projectName, 'pending', 1)
-    const pendingCount = remaining.length > 0 ? '(aún hay pendientes — vuelve a llamar index_temp)' : '(✅ todo indexado)'
-    const mode = skipScoring ? 'sin scoring LLM' : 'con scoring qwen3 (batch)'
-
-    log('INDEX_TEMP', { projectName, collection: targetCol, indexed: indexedIds.length, batchSize, skipScoring, batchMode: true, totalMs: Date.now() - t0 })
+    log('INDEX_TEMP', { projectName, indexed, batchSize, skipScoring, totalMs: elapsed })
     return {
-      content: [{
-        type: 'text',
-        text: `🔄 ${indexedIds.length}/${pending.length} memorias indexadas en "${projectName}" ${mode}:\n\n${results.join('\n')}\n\n${pendingCount}`,
-      }],
+      content: [{ type: 'text', text: `🔄 ${indexed}/${before.length} memorias indexadas en "${projectName}" ${mode} (${elapsed}ms)\n\n${pendingNote}` }],
     }
   }
 
