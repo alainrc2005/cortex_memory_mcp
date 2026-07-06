@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CORTEX — Migration Wizard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg:        #0d0f14;
+      --surface:   #141720;
+      --surface2:  #1c2030;
+      --border:    #252a3a;
+      --accent:    #6366f1;
+      --accent2:   #818cf8;
+      --green:     #22c55e;
+      --yellow:    #f59e0b;
+      --red:       #ef4444;
+      --muted:     #6b7280;
+      --text:      #e2e8f0;
+      --text2:     #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .logo {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--accent2);
+      letter-spacing: -0.3px;
+    }
+    .logo span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+
+    .header-stats {
+      margin-left: auto;
+      display: flex;
+      gap: 20px;
+      font-size: 13px;
+    }
+    .stat { display: flex; align-items: center; gap: 6px; }
+    .stat-dot { width: 8px; height: 8px; border-radius: 50%; }
+    .stat-dot.green  { background: var(--green); }
+    .stat-dot.yellow { background: var(--yellow); }
+    .stat-dot.red    { background: var(--red); }
+    .stat-dot.purple { background: #a855f7; }
+    .stat-val { font-weight: 600; }
+    .stat-label { color: var(--muted); }
+
+    /* ── Layout ── */
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 0;
+      flex: 1;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 20px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sidebar-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+      padding: 0 8px;
+    }
+
+    .col-item {
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .col-item:hover { background: var(--surface2); }
+    .col-item.active {
+      background: rgba(99,102,241,0.12);
+      border-color: rgba(99,102,241,0.3);
+    }
+    .col-name {
+      font-size: 13px;
+      font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text2);
+    }
+    .col-item.active .col-name { color: var(--accent2); }
+    .col-badge {
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--surface2);
+      color: var(--muted);
+      padding: 2px 7px;
+      border-radius: 10px;
+    }
+    .col-item.active .col-badge { background: rgba(99,102,241,0.2); color: var(--accent2); }
+    .col-item.done .col-name { color: var(--muted); text-decoration: line-through; }
+
+    /* ── Main ── */
+    .main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 40px 48px;
+      gap: 28px;
+      overflow-y: auto;
+    }
+
+    /* ── Card ── */
+    .card {
+      width: 100%;
+      max-width: 800px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+    .card-header {
+      padding: 16px 24px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .card-col {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .card-id {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      margin-left: auto;
+      opacity: 0.6;
+    }
+
+    .card-meta {
+      padding: 16px 24px 0;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .meta-tag {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--surface2);
+      color: var(--text2);
+      border: 1px solid var(--border);
+    }
+    .meta-tag.imp  { color: var(--yellow); border-color: rgba(245,158,11,0.3); background: rgba(245,158,11,0.08); }
+    .meta-tag.type { color: var(--accent2); border-color: rgba(99,102,241,0.3); background: rgba(99,102,241,0.08); }
+
+    .card-content {
+      padding: 20px 24px;
+      font-size: 15px;
+      line-height: 1.7;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+
+    /* ── Actions ── */
+    .actions {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .project-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .project-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text2);
+      white-space: nowrap;
+    }
+
+    select {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    select:focus { border-color: var(--accent); }
+
+    input[type="text"] {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input[type="text"]:focus { border-color: var(--accent); }
+    input[type="text"]::placeholder { color: var(--muted); }
+
+    .btn-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      padding: 10px 24px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: 'Inter', sans-serif;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-accept {
+      background: rgba(34,197,94,0.15);
+      border-color: rgba(34,197,94,0.4);
+      color: var(--green);
+      flex: 1;
+    }
+    .btn-accept:hover:not(:disabled) {
+      background: rgba(34,197,94,0.25);
+      transform: translateY(-1px);
+    }
+
+    .btn-skip {
+      background: rgba(245,158,11,0.1);
+      border-color: rgba(245,158,11,0.3);
+      color: var(--yellow);
+      flex: 1;
+    }
+    .btn-skip:hover:not(:disabled) {
+      background: rgba(245,158,11,0.2);
+      transform: translateY(-1px);
+    }
+
+    .btn-delete {
+      background: rgba(239,68,68,0.1);
+      border-color: rgba(239,68,68,0.3);
+      color: var(--red);
+      flex: 1;
+    }
+    .btn-delete:hover:not(:disabled) {
+      background: rgba(239,68,68,0.2);
+      transform: translateY(-1px);
+    }
+
+    /* ── Estados ── */
+    .state-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 80px 24px;
+      text-align: center;
+      color: var(--muted);
+    }
+    .state-empty .icon { font-size: 48px; }
+    .state-empty h2 { font-size: 18px; font-weight: 600; color: var(--text2); }
+    .state-empty p  { font-size: 14px; }
+
+    .loading {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ── */
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      padding: 12px 20px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      border: 1px solid transparent;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: all 0.2s;
+      pointer-events: none;
+      z-index: 999;
+      max-width: 320px;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast.success { background: rgba(34,197,94,0.15); border-color: rgba(34,197,94,0.4); color: var(--green); }
+    .toast.warn    { background: rgba(245,158,11,0.15); border-color: rgba(245,158,11,0.4); color: var(--yellow); }
+    .toast.error   { background: rgba(239,68,68,0.15); border-color: rgba(239,68,68,0.4); color: var(--red); }
+
+    /* ── Progress bar ── */
+    .progress-wrap {
+      width: 100%;
+      max-width: 800px;
+    }
+    .progress-bar {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent2));
+      border-radius: 2px;
+      transition: width 0.4s ease;
+    }
+    .progress-text {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+      text-align: right;
+    }
+
+    /* ── Batch results panel ── */
+    .batch-results {
+      width: 100%;
+      max-width: 800px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      animation: fadeIn 0.25s ease;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.7px;
+    }
+    .section-title.red    { color: var(--red); }
+    .section-title.green  { color: var(--green); }
+    .section-count {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Lista de eliminadas */
+    .deleted-list {
+      background: var(--surface);
+      border: 1px solid rgba(239,68,68,0.2);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .deleted-list-header {
+      padding: 12px 18px;
+      background: rgba(239,68,68,0.06);
+      border-bottom: 1px solid rgba(239,68,68,0.15);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .deleted-list-header:hover { background: rgba(239,68,68,0.1); }
+    .deleted-toggle { color: var(--red); font-size: 13px; font-weight: 700; }
+    .deleted-list-body {
+      max-height: 260px;
+      overflow-y: auto;
+    }
+    .deleted-item {
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .deleted-item:last-child { border-bottom: none; }
+    .deleted-content {
+      flex: 1;
+      font-size: 13px;
+      color: var(--text2);
+      line-height: 1.5;
+    }
+    .deleted-reason {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+      margin-top: 3px;
+    }
+    .btn-rescue {
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(34,197,94,0.3);
+      background: rgba(34,197,94,0.08);
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+      font-family: 'Inter', sans-serif;
+    }
+    .btn-rescue:hover { background: rgba(34,197,94,0.18); }
+
+    /* Cola de revisión */
+    .review-queue {
+      background: var(--surface);
+      border: 1px solid rgba(34,197,94,0.2);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .review-queue-header {
+      padding: 12px 18px;
+      background: rgba(34,197,94,0.06);
+      border-bottom: 1px solid rgba(34,197,94,0.15);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .queue-nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .queue-pos {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .btn-nav {
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text2);
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.12s;
+    }
+    .btn-nav:hover:not(:disabled) { background: var(--border); }
+    .btn-nav:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    .review-card-content {
+      padding: 18px;
+      font-size: 14px;
+      line-height: 1.7;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .review-actions {
+      padding: 12px 18px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    /* ── Keyboard hint ── */
+    .kbd-hint {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      margin-top: 4px;
+    }
+    .kbd { 
+      background: var(--surface2); 
+      border: 1px solid var(--border); 
+      padding: 2px 7px; 
+      border-radius: 4px; 
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+    }
+    .batch-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 10px;
+    }
+    .btn-batch {
+      width: 100%;
+      padding: 9px 14px;
+      border-radius: 8px;
+      border: 1px solid rgba(168,85,247,0.4);
+      background: rgba(168,85,247,0.12);
+      color: #c084fc;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      font-family: 'Inter', sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-batch:hover:not(:disabled) {
+      background: rgba(168,85,247,0.22);
+      transform: translateY(-1px);
+    }
+    .btn-batch:disabled { opacity: 0.4; cursor: not-allowed; }
+    .batch-result {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .batch-result .ok  { color: var(--green); }
+    .batch-result .del { color: var(--red); }
+
+    /* ── Noise badge ── */
+    .noise-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      padding: 3px 9px;
+      border-radius: 20px;
+      background: rgba(168,85,247,0.12);
+      border: 1px solid rgba(168,85,247,0.3);
+      color: #c084fc;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">🧠 CORTEX <span>Migration Wizard</span></div>
+  <div class="header-stats">
+    <div class="stat">
+      <div class="stat-dot green"></div>
+      <span class="stat-val" id="stat-accepted">0</span>
+      <span class="stat-label">aceptados</span>
+    </div>
+    <div class="stat">
+      <div class="stat-dot yellow"></div>
+      <span class="stat-val" id="stat-skipped">0</span>
+      <span class="stat-label">saltados</span>
+    </div>
+    <div class="stat">
+      <div class="stat-dot red"></div>
+      <span class="stat-val" id="stat-deleted">0</span>
+      <span class="stat-label">borrados</span>
+    </div>
+    <div class="stat">
+      <div class="stat-dot purple"></div>
+      <span class="stat-val" id="stat-auto">0</span>
+      <span class="stat-label">auto-eliminados</span>
+    </div>
+  </div>
+</header>
+
+<!-- Layout -->
+<div class="layout">
+  <!-- Sidebar: colecciones -->
+  <div class="sidebar">
+    <div class="sidebar-title">Colecciones legacy</div>
+    <div id="col-list"></div>
+
+    <!-- Panel de clasificación automática -->
+    <div class="batch-panel">
+      <div class="batch-title">🤖 Auto-clasificar</div>
+      <button class="btn-batch" id="btn-batch" onclick="runBatchClassify()">
+        ⚡ Limpiar lote (20)
+      </button>
+      <div class="batch-result" id="batch-result"></div>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <div id="progress-area" class="progress-wrap" style="display:none">
+      <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="progress-text" id="progress-text"></div>
+    </div>
+
+    <div id="content-area" style="width:100%;max-width:800px;display:flex;flex-direction:column;gap:28px;align-items:center;">
+      <!-- Se rellena dinámicamente -->
+    </div>
+
+    <div class="kbd-hint">
+      <span><span class="kbd">A</span> Aceptar</span>
+      <span><span class="kbd">S</span> Saltar</span>
+      <span><span class="kbd">D</span> Borrar</span>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── Estado ──────────────────────────────────────────────────────────────────
+  let currentCollection = null
+  let currentPoint      = null
+  let projects          = []
+  let collectionCounts  = {}
+  let busy              = false
+  let batchBusy         = false
+
+  // ── Init ────────────────────────────────────────────────────────────────────
+  async function init() {
+    const [statusData, projData] = await Promise.all([
+      fetch('/api/status').then(r => r.json()),
+      fetch('/api/projects').then(r => r.json()),
+    ])
+
+    projects         = projData.projects || []
+    collectionCounts = statusData.counts || {}
+    updateStats(statusData.stats)
+    renderSidebar(statusData)
+
+    // Seleccionar primera colección no vacía
+    const first = Object.entries(collectionCounts).find(([, c]) => c > 0)
+    if (first) selectCollection(first[0])
+    else renderDone()
+  }
+
+  // ── Sidebar ─────────────────────────────────────────────────────────────────
+  function renderSidebar(statusData) {
+    const list = document.getElementById('col-list')
+    list.innerHTML = ''
+    const legacyCols = [
+      'work_memories','social_memories','archive_memories',
+      'directive_memories','core_directives','signal_memories',
+    ]
+    for (const col of legacyCols) {
+      const count = collectionCounts[col] ?? 0
+      const done  = statusData.cursors?.[col]?.done || count === 0
+      const el = document.createElement('div')
+      el.className = 'col-item' + (done ? ' done' : '') + (col === currentCollection ? ' active' : '')
+      el.innerHTML = `
+        <span class="col-name">${col}</span>
+        <span class="col-badge">${count.toLocaleString()}</span>
+      `
+      el.onclick = () => { if (!done) selectCollection(col) }
+      list.appendChild(el)
+    }
+  }
+
+  function selectCollection(col) {
+    currentCollection = col
+    document.querySelectorAll('.col-item').forEach(el => el.classList.remove('active'))
+    const items = document.querySelectorAll('.col-item')
+    items.forEach(el => {
+      if (el.querySelector('.col-name').textContent === col) el.classList.add('active')
+    })
+    loadNext()
+  }
+
+  // ── Cargar siguiente punto ───────────────────────────────────────────────────
+  async function loadNext() {
+    if (busy) return
+    setLoading(true)
+    try {
+      const res  = await fetch(`/api/next?collection=${currentCollection}`)
+      const data = await res.json()
+
+      if (data.done) {
+        currentPoint = null
+        renderCollectionDone()
+        return
+      }
+
+      currentPoint = data.point
+      renderCard(currentPoint)
+    } catch (err) {
+      renderError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ── Renderizar card ──────────────────────────────────────────────────────────
+  function renderCard(point) {
+    const p   = point.payload
+    const content  = p.content || p.raw_content_preview || '(sin contenido)'
+    const imp      = p.importance ?? '?'
+    const type     = p.lazarus_phase || p.type || ''
+    const emotion  = p.emotion || ''
+    const created  = p.created_at ? new Date(p.created_at * 1000).toLocaleDateString('es-MX') : ''
+
+    const metaTags = []
+    if (imp !== '?') metaTags.push(`<span class="meta-tag imp">imp: ${imp}</span>`)
+    if (type) metaTags.push(`<span class="meta-tag type">${type}</span>`)
+    if (emotion && emotion !== 'neutral') metaTags.push(`<span class="meta-tag">${emotion}</span>`)
+    if (created) metaTags.push(`<span class="meta-tag">${created}</span>`)
+
+    const cardHTML = `
+      <div class="card">
+        <div class="card-header">
+          <span class="card-col">${currentCollection}</span>
+          <span class="card-id">${point.id.slice(0,8)}…</span>
+        </div>
+        ${metaTags.length ? `<div class="card-meta">${metaTags.join('')}</div>` : ''}
+        <div class="card-content">${escapeHtml(content)}</div>
+      </div>
+    `
+
+    const actionsHTML = `
+      <div class="actions">
+        <div class="project-row">
+          <span class="project-label">→ Proyecto:</span>
+          <select id="project-select">
+            ${projects.map(p => `<option value="${p}">${p}</option>`).join('')}
+          </select>
+          <input type="text" id="project-custom" placeholder="o escribe uno nuevo…" style="max-width:200px">
+        </div>
+        <div class="btn-row">
+          <button class="btn-accept" onclick="doAction('accept')">✅ Aceptar</button>
+          <button class="btn-skip"   onclick="doAction('skip')">⏭ Saltar</button>
+          <button class="btn-delete" onclick="doAction('delete')">🗑 Borrar</button>
+        </div>
+      </div>
+    `
+
+    const area = document.getElementById('content-area')
+    area.innerHTML = cardHTML + actionsHTML
+
+    // Recordar último proyecto seleccionado
+    if (window._lastProject) {
+      const sel = document.getElementById('project-select')
+      if (sel) sel.value = window._lastProject
+    }
+  }
+
+  // ── Ejecutar acción ──────────────────────────────────────────────────────────
+  async function doAction(action) {
+    if (busy || !currentPoint) return
+
+    let projectName = null
+    if (action === 'accept') {
+      const custom = document.getElementById('project-custom')?.value?.trim()
+      const select = document.getElementById('project-select')?.value
+      projectName = custom || select
+      if (!projectName) { toast('Selecciona o escribe un proyecto', 'warn'); return }
+      window._lastProject = projectName
+    }
+
+    setBusy(true)
+    try {
+      const res = await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          collection: currentCollection,
+          id:         currentPoint.id,
+          content:    currentPoint.payload?.content || currentPoint.payload?.raw_content_preview || '',
+          projectName,
+        }),
+      })
+      const data = await res.json()
+
+      if (!data.ok) { toast(data.error || 'Error', 'error'); return }
+
+      updateStats(data.stats)
+
+      const msgs = { accept: '✅ Guardado en temp_memories', skip: '⏭ Saltado', delete: '🗑 Borrado del legacy' }
+      const types = { accept: 'success', skip: 'warn', delete: 'warn' }
+      toast(msgs[action], types[action])
+
+      // Actualizar contador en sidebar
+      if (action !== 'skip') {
+        collectionCounts[currentCollection] = Math.max(0, (collectionCounts[currentCollection] ?? 1) - 1)
+        document.querySelectorAll('.col-item').forEach(el => {
+          if (el.querySelector('.col-name').textContent === currentCollection) {
+            el.querySelector('.col-badge').textContent = collectionCounts[currentCollection].toLocaleString()
+          }
+        })
+      }
+
+      setBusy(false)   // liberar ANTES de loadNext para que no vea busy=true
+      loadNext()
+    } catch (err) {
+      toast(err.message, 'error')
+      setBusy(false)
+    }
+  }
+
+  // ── Estados especiales ───────────────────────────────────────────────────────
+  function renderCollectionDone() {
+    document.getElementById('content-area').innerHTML = `
+      <div class="state-empty">
+        <div class="icon">✅</div>
+        <h2>Colección "${currentCollection}" completada</h2>
+        <p>Selecciona otra colección del sidebar para continuar.</p>
+      </div>
+    `
+  }
+
+  function renderDone() {
+    document.getElementById('content-area').innerHTML = `
+      <div class="state-empty">
+        <div class="icon">🎉</div>
+        <h2>¡Migración completada!</h2>
+        <p>Todas las colecciones legacy han sido procesadas.</p>
+        <p style="margin-top:8px">Ejecuta <code style="font-family:'JetBrains Mono';background:var(--surface2);padding:2px 6px;border-radius:4px">index_temp</code> en cada proyecto para indexar las memorias aceptadas.</p>
+      </div>
+    `
+  }
+
+  function renderError(msg) {
+    document.getElementById('content-area').innerHTML = `
+      <div class="state-empty">
+        <div class="icon">❌</div>
+        <h2>Error</h2>
+        <p>${escapeHtml(msg)}</p>
+      </div>
+    `
+  }
+
+  function setLoading(val) {
+    busy = val
+    if (val) {
+      document.getElementById('content-area').innerHTML = `
+        <div class="loading"><div class="spinner"></div> Cargando siguiente memoria…</div>
+      `
+    }
+  }
+
+  function setBusy(val) {
+    busy = val
+    document.querySelectorAll('button').forEach(b => b.disabled = val)
+  }
+
+  // ── Stats ────────────────────────────────────────────────────────────────────
+  function updateStats(stats) {
+    if (!stats) return
+    document.getElementById('stat-accepted').textContent = stats.accepted   ?? 0
+    document.getElementById('stat-skipped').textContent  = stats.skipped    ?? 0
+    document.getElementById('stat-deleted').textContent  = stats.deleted    ?? 0
+    document.getElementById('stat-auto').textContent     = stats.autoDeleted ?? 0
+  }
+
+  // ── Batch classify ───────────────────────────────────────────────────────────
+  let batchQueue  = []    // memorias para revisar del lote actual
+  let batchQueueIdx = 0   // índice actual en la cola
+
+  async function runBatchClassify() {
+    if (batchBusy || busy || !currentCollection) return
+    batchBusy = true
+    const btn    = document.getElementById('btn-batch')
+    const result = document.getElementById('batch-result')
+    btn.disabled = true
+    btn.textContent = '⏳ Clasificando…'
+    result.innerHTML = ''
+
+    try {
+      const res  = await fetch('/api/batch-classify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection: currentCollection, batchSize: 20 }),
+      })
+      const data = await res.json()
+
+      if (data.done) {
+        result.innerHTML = '<span class="ok">✅ Colección completada</span>'
+        renderCollectionDone()
+        return
+      }
+
+      updateStats(data.stats)
+
+      // Actualizar contador sidebar
+      collectionCounts[currentCollection] = Math.max(0, (collectionCounts[currentCollection] ?? 0) - 20)
+      document.querySelectorAll('.col-item').forEach(el => {
+        if (el.querySelector('.col-name').textContent === currentCollection)
+          el.querySelector('.col-badge').textContent = collectionCounts[currentCollection].toLocaleString()
+      })
+
+      // Badge en sidebar
+      const totalDel = data.deleted || 0
+      const kept     = data.kept || []
+      result.innerHTML = [
+        `<span class="del">🗑 ${totalDel} eliminadas</span>`,
+        `&nbsp;&nbsp;<span class="ok">✅ ${kept.length} para revisar</span>`,
+        data.heuristic !== undefined
+          ? `<br><span style="color:var(--muted)">Heurística: ${data.heuristic} · LLM: ${data.llm ?? 0}</span>`
+          : '',
+      ].join('')
+
+      // Mostrar panel de resultados
+      batchQueue    = kept
+      batchQueueIdx = 0
+      renderBatchResults(data.deletedItems || [], kept)
+
+    } catch (err) {
+      result.innerHTML = `<span style="color:var(--red)">❌ ${escapeHtml(err.message)}</span>`
+      toast('Error en batch classify', 'error')
+    } finally {
+      batchBusy = false
+      btn.disabled = false
+      btn.textContent = '⚡ Limpiar lote (20)'
+    }
+  }
+
+  // ── Render panel de resultados batch ──────────────────────────────────────
+  function renderBatchResults(deletedItems, keptPoints) {
+    const area = document.getElementById('content-area')
+
+    // Sección de eliminadas
+    const deletedHTML = deletedItems.length > 0 ? `
+      <div class="deleted-list">
+        <div class="deleted-list-header" onclick="toggleDeleted()">
+          <span class="deleted-toggle" id="deleted-arrow">▼</span>
+          <span class="section-title red">🗑 Auto-eliminadas (${deletedItems.length})</span>
+          <span class="section-count" style="margin-left:auto">click para expandir/colapsar</span>
+        </div>
+        <div class="deleted-list-body" id="deleted-body">
+          ${deletedItems.map((item, i) => `
+            <div class="deleted-item" id="del-item-${i}">
+              <div style="flex:1">
+                <div class="deleted-content">${escapeHtml((item.content || '').slice(0, 200))}${(item.content||'').length > 200 ? '…' : ''}</div>
+                <div class="deleted-reason">${escapeHtml(item.reason || '')}</div>
+              </div>
+              <button class="btn-rescue" onclick="rescueItem(${i})">Rescatar</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''
+
+    // Sección de cola de revisión
+    const reviewHTML = keptPoints.length > 0
+      ? renderQueueHTML(keptPoints, 0)
+      : `<div class="state-empty" style="padding:40px 24px">
+           <div class="icon">✅</div>
+           <h2>Todo limpio</h2>
+           <p>Todas las memorias del lote eran ruido — no hay nada que revisar.</p>
+         </div>`
+
+    area.innerHTML = `
+      <div class="batch-results">
+        ${deletedHTML}
+        ${reviewHTML}
+      </div>
+    `
+
+    // Guardar referencia a deleted items para rescate
+    window._batchDeletedItems = deletedItems
+    window._batchKept = keptPoints
+  }
+
+  function renderQueueHTML(keptPoints, idx) {
+    if (!keptPoints.length) return ''
+    const pt      = keptPoints[idx]
+    const content = pt.payload?.content || pt.payload?.raw_content_preview || '(sin contenido)'
+    const total   = keptPoints.length
+
+    return `
+      <div class="review-queue">
+        <div class="review-queue-header">
+          <span class="section-title green">📌 Para revisar</span>
+          <div class="queue-nav">
+            <button class="btn-nav" onclick="queueNav(-1)" ${idx === 0 ? 'disabled' : ''}>◀</button>
+            <span class="queue-pos">${idx + 1} / ${total}</span>
+            <button class="btn-nav" onclick="queueNav(1)" ${idx >= total - 1 ? 'disabled' : ''}>▶</button>
+          </div>
+        </div>
+        <div class="review-card-content">${escapeHtml(content)}</div>
+        <div class="review-actions">
+          <span class="project-label" style="white-space:nowrap">Proyecto:</span>
+          <select id="queue-project-select" style="flex:1">
+            ${projects.map(p => `<option value="${p}">${p}</option>`).join('')}
+          </select>
+          <input type="text" id="queue-project-custom" placeholder="o escribe…" style="max-width:160px">
+          <button class="btn-accept" onclick="doQueueAction('accept')" style="flex:0;padding:8px 16px">✅</button>
+          <button class="btn-skip"   onclick="doQueueAction('skip')"   style="flex:0;padding:8px 16px">⏭</button>
+          <button class="btn-delete" onclick="doQueueAction('delete')" style="flex:0;padding:8px 16px">🗑</button>
+        </div>
+      </div>
+    `
+  }
+
+  function toggleDeleted() {
+    const body  = document.getElementById('deleted-body')
+    const arrow = document.getElementById('deleted-arrow')
+    if (!body) return
+    const collapsed = body.style.display === 'none'
+    body.style.display = collapsed ? '' : 'none'
+    arrow.textContent  = collapsed ? '▼' : '▶'
+  }
+
+  // Rescatar una memoria eliminada: moverla al proyecto elegido
+  async function rescueItem(idx) {
+    const item = window._batchDeletedItems?.[idx]
+    if (!item) return
+    const project = window._lastProject || projects[0]
+    const newProj = prompt(`Guardar en proyecto:`, project)
+    if (!newProj) return
+    window._lastProject = newProj
+
+    try {
+      await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'accept', collection: currentCollection, id: item.id || 'rescued', content: item.content, projectName: newProj }),
+      })
+      // Marcar como rescatada visualmente
+      const el = document.getElementById(`del-item-${idx}`)
+      if (el) {
+        el.style.opacity = '0.4'
+        el.querySelector('.btn-rescue').textContent = '✅ Rescatada'
+        el.querySelector('.btn-rescue').disabled = true
+      }
+      toast(`✅ Rescatada → ${newProj}`, 'success')
+    } catch (err) {
+      toast('Error al rescatar', 'error')
+    }
+  }
+
+  function queueNav(dir) {
+    const kept = window._batchKept || []
+    batchQueueIdx = Math.max(0, Math.min(kept.length - 1, batchQueueIdx + dir))
+    // Re-render solo la sección de revisión
+    const queueEl = document.querySelector('.review-queue')
+    if (queueEl) queueEl.outerHTML = renderQueueHTML(kept, batchQueueIdx)
+    else document.querySelector('.batch-results').insertAdjacentHTML('beforeend', renderQueueHTML(kept, batchQueueIdx))
+    // Restaurar proyecto
+    const sel = document.getElementById('queue-project-select')
+    if (sel && window._lastProject) sel.value = window._lastProject
+  }
+
+  async function doQueueAction(action) {
+    const kept = window._batchKept || []
+    if (!kept.length) return
+    const pt = kept[batchQueueIdx]
+    if (!pt) return
+
+    let projectName = null
+    if (action === 'accept') {
+      const custom = document.getElementById('queue-project-custom')?.value?.trim()
+      const select = document.getElementById('queue-project-select')?.value
+      projectName = custom || select
+      if (!projectName) { toast('Selecciona un proyecto', 'warn'); return }
+      window._lastProject = projectName
+    }
+
+    try {
+      const res  = await fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action,
+          collection: currentCollection,
+          id:         pt.id,
+          content:    pt.payload?.content || pt.payload?.raw_content_preview || '',
+          projectName,
+        }),
+      })
+      const data = await res.json()
+      if (data.ok) updateStats(data.stats)
+
+      const msgs = { accept: '✅ Aceptada', skip: '⏭ Saltada', delete: '🗑 Borrada' }
+      toast(msgs[action], action === 'accept' ? 'success' : 'warn')
+
+      // Avanzar al siguiente en la cola o cargar siguiente normal
+      if (batchQueueIdx < kept.length - 1) {
+        batchQueueIdx++
+        const queueEl = document.querySelector('.review-queue')
+        if (queueEl) queueEl.outerHTML = renderQueueHTML(kept, batchQueueIdx)
+        const sel = document.getElementById('queue-project-select')
+        if (sel && window._lastProject) sel.value = window._lastProject
+      } else {
+        // Cola del lote agotada — cargar siguiente punto normal del legacy
+        toast('Lote completado — cargando siguiente…', 'success')
+        loadNext()
+      }
+    } catch (err) {
+      toast(err.message, 'error')
+    }
+  }
+
+  // ── Toast ────────────────────────────────────────────────────────────────────
+  let _toastTimer = null
+  function toast(msg, type = 'success') {
+    const el = document.getElementById('toast')
+    el.className = `toast ${type}`
+    el.textContent = msg
+    requestAnimationFrame(() => el.classList.add('show'))
+    clearTimeout(_toastTimer)
+    _toastTimer = setTimeout(() => el.classList.remove('show'), 2500)
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+  }
+
+  // ── Teclado ──────────────────────────────────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (['INPUT','SELECT','TEXTAREA'].includes(e.target.tagName)) return
+    if (e.key === 'a' || e.key === 'A') doAction('accept')
+    if (e.key === 's' || e.key === 'S') doAction('skip')
+    if (e.key === 'd' || e.key === 'D') doAction('delete')
+  })
+
+  // ── Arrancar ─────────────────────────────────────────────────────────────────
+  init()
+</script>
+</body>
+</html>
