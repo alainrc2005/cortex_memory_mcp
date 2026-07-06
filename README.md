@@ -104,7 +104,7 @@ graph LR
         KG["Entities + Relations\ngraph_neighbors\ngraph_timeline\ngraph_query (Cypher)"]
     end
 
-    QB --"index_temp\n(when CPU available)"--> OB
+    QB --"auto-indexed\n(scheduler, ~60s)"--> OB
     OB --> L3
     OB --> L4
 
@@ -185,7 +185,7 @@ Two priority engines, chosen automatically by engrama type:
 - Query neighbors, timelines, or run arbitrary Cypher queries
 - Included in `get_context_for` context block automatically
 
-### Two-Speed Ingestion
+### Two-Speed Ingestion + Automatic Indexing
 ```
 Fast path (no LLM, no embedding, instant):
   quick_observe → temp_memories buffer
@@ -193,9 +193,13 @@ Fast path (no LLM, no embedding, instant):
 Full pipeline (embedding + LLM scoring):
   observe → project collection (direct)
 
-Batch upgrade (when CPU is available):
-  index_temp → processes N pending items in one batch
-               1 ONNX call + 1 LLM call + 1 Qdrant upsert
+Automatic upgrade (no manual step required):
+  Maintenance Scheduler → runs autoIndexTemp() every cycle:
+    • T+60s after server start: rescues orphaned buffer memories
+      from previous sessions (full drain, all projects)
+    • Every 1 hour: indexes up to 10 pending memories per project
+    • Manual call: index_temp is still available for on-demand indexing
+  Each batch: 1 ONNX call + 1 LLM scoring call + 1 Qdrant upsert
 ```
 
 ### Operator Profile
@@ -461,7 +465,7 @@ Analyze recent memories to extract behavioral patterns, coding preferences, and 
 ### 🟡 Fast Buffer (no LLM, no embedding)
 
 #### `quick_observe`
-Save a memory **instantly** — no LLM, no embedding. Goes to a temporary buffer. Use when you need speed and can index later.
+Save a memory **instantly** — no LLM, no embedding. Goes to a temporary buffer that is **automatically indexed by the maintenance scheduler** (within ~60s on startup, or the next hourly cycle). You never need to call `index_temp` manually unless you want immediate indexing.
 
 ```json
 {
@@ -509,7 +513,7 @@ Show what's waiting in the temporary buffer to be indexed.
 ---
 
 #### `index_temp`
-Process pending buffer memories with full embedding + LLM scoring. Call when CPU is available.
+Process pending buffer memories with full embedding + LLM scoring. **Optional** — the maintenance scheduler does this automatically every hour (and 60s after server start). Call manually when you need immediate indexing without waiting for the next scheduler cycle.
 
 ```json
 {
