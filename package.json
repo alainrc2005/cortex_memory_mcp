@@ -5,11 +5,17 @@
   "main": "dist/server.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "test": "node test_cortex.mjs",
-    "eval": "node eval/harness.mjs",
-    "longmemeval": "node eval/longmemeval_cortex.mjs"
+    "build":        "tsc",
+    "start":        "node dist/server.js",
+    "test":         "vitest run",
+    "test:unit":    "vitest run tests/unit",
+    "test:int":     "vitest run tests/integration",
+    "test:mcp":     "vitest run tests/mcp",
+    "test:watch":   "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:legacy":  "node test_cortex.mjs",
+    "eval":         "node eval/harness.mjs",
+    "longmemeval":  "node eval/longmemeval_cortex.mjs"
   },
   "dependencies": {
     "@langchain/core": "^1.2.1",
@@ -24,6 +30,8 @@
   "devDependencies": {
     "@types/node": "^20.11.24",
     "@types/uuid": "^9.0.8",
-    "typescript": "^5.3.3"
+    "@vitest/coverage-v8": "^4.1.10",
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.10"
   }
 }
