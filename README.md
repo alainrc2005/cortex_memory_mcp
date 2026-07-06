@@ -150,7 +150,7 @@ flowchart TD
 - **Full LangGraph workflow** on `observe`: score → tag → embed → link → upsert
 - **Hybrid search**: dense (cosine) + sparse (BM25/IDF) fused via Reciprocal Rank Fusion
 - **Cross-encoder reranking** with a local LLM (qwen3) in a single batch call
-- **Cross-project search**: queries the project collection + legacy + global in one pass
+- **Cross-project search**: queries the project collection + global in one pass
 
 ### Retrieval Priority (not expiration)
 
@@ -213,7 +213,7 @@ Batch upgrade (when CPU is available):
 |---|---|---|
 | Node.js | ≥ 18 | ESM support required |
 | Qdrant | ≥ 1.9 | With sparse vector support |
-| Ollama | any | With `qwen3` model pulled |
+| **LLM** *(choose one)* | — | OpenRouter API key **or** local Ollama **or** `none` |
 | TypeScript | 5.3 | Dev only |
 
 ### 1. Install Qdrant
@@ -224,12 +224,60 @@ docker run -p 6333:6333 -p 6334:6334 \
   qdrant/qdrant
 ```
 
-### 2. Install Ollama + qwen3
+### 2. Choose your LLM backend
+
+CORTEX routes all LLM operations (scoring, tagging, reranking, consolidation) through a single router controlled by `CORTEX_LLM_BACKEND`. Three backends are supported:
+
+#### Option A — OpenRouter (cloud, recommended for CPU-only machines)
+
+No local GPU required. Use any model available on [openrouter.ai](https://openrouter.ai) — free `:free` models work out of the box.
+
+```env
+CORTEX_LLM_BACKEND=openrouter
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=google/gemma-4-27b-it:free   # any OpenRouter model slug
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
+
+#### Option B — Ollama (local, GPU recommended)
+
+Fully offline. `qwen3` or any model you have pulled locally.
 
 ```bash
-# Install Ollama (https://ollama.com)
+# Install Ollama: https://ollama.com
 ollama pull qwen3
 ```
+
+```env
+CORTEX_LLM_BACKEND=ollama
+OLLAMA_URL=http://localhost:11434   # default if omitted
+```
+
+> ⚠️ On CPU-only machines Ollama can take 90–130 s per LLM call. Use OpenRouter or `none` if latency matters.
+
+#### Option C — none (fastest, no LLM at all)
+
+All LLM operations fall back to safe defaults: `importance: 5`, `type: FACT`, no tags. Embeddings and vector search still work normally.
+
+```env
+CORTEX_LLM_BACKEND=none
+```
+
+#### Auto-detection logic
+
+If `CORTEX_LLM_BACKEND` is not set, CORTEX auto-detects:
+1. If `OPENROUTER_API_KEY` is defined → uses **openrouter**
+2. Otherwise → falls back to **ollama**
+
+#### Reranker flag
+
+```env
+# true  = activates LLM cross-encoder reranking after fastembed (better precision)
+# false = fastembed ONNX only (<1s, sufficient for collections < 200 engramas)
+CORTEX_RERANKER_ENABLED=true
+```
+
+---
 
 ### 3. Install CORTEX
 
@@ -241,10 +289,29 @@ npm install
 
 ### 4. Configure `.env`
 
+Minimal setup:
+
 ```env
+# ── Qdrant ────────────────────────────────────────────────────────────────────
 QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=your_api_key_here          # leave empty if no auth
+QDRANT_API_KEY=your_api_key_here          # omit if no auth
 FASTEMBED_CACHE_DIR=./.fastembed_cache    # ONNX model cache
+
+# ── LLM Backend ───────────────────────────────────────────────────────────────
+# "openrouter" | "ollama" | "none"
+# Auto-detected: openrouter if OPENROUTER_API_KEY is set, otherwise ollama
+CORTEX_LLM_BACKEND=openrouter
+
+# ── OpenRouter (if CORTEX_LLM_BACKEND=openrouter) ────────────────────────────
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL=google/gemma-4-27b-it:free
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+# ── Ollama (if CORTEX_LLM_BACKEND=ollama) ────────────────────────────────────
+# OLLAMA_URL=http://localhost:11434
+
+# ── Reranker ──────────────────────────────────────────────────────────────────
+CORTEX_RERANKER_ENABLED=true
 ```
 
 ### 5. Build & Run
@@ -608,9 +675,9 @@ Get a full system health overview.
 
 **Colecciones activas**: 4
 • my-project: 147 engramas
-• work (legacy): 18,639 engramas
 • social: 896 engramas
 • global: 12 engramas
+• pets: 4 engramas
 
 **Buffer temporal (temp_memories)**: ✅ vacío
 **Operator Profile**: ✅ (actualizado 13/06/2026)
@@ -755,7 +822,7 @@ node migrate_sparse_index.mjs --dry-run
 node migrate_sparse_index.mjs
 
 # Migrate a single collection
-node migrate_sparse_index.mjs --only=work_memories
+node migrate_sparse_index.mjs --only=cortex_hotetec
 
 # Skip a collection
 node migrate_sparse_index.mjs --skip=temp_memories
@@ -775,7 +842,7 @@ node migrate_sparse_index.mjs --skip=temp_memories
 | Graph DB | KuzuDB 0.11 | Knowledge Graph with Cypher |
 | Dense Embedding | fastembed all-MiniLM-L6-v2 | 384d, ONNX, local, no GPU |
 | Sparse Embedding | fastembed SPLADE_PP_en_v1 | BM25-like, ONNX, local, no GPU |
-| LLM | Ollama (qwen3) | Scoring, tagging, reranking, consolidation |
+| LLM | OpenRouter / Ollama / none | Scoring, tagging, reranking, consolidation |
 | Language | TypeScript 5.3 + ESM | |
 
 ---

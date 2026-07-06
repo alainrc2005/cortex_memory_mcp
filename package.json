@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "test": "node test_cortex.mjs",
-    "eval": "node eval/harness.mjs"
+    "eval": "node eval/harness.mjs",
+    "longmemeval": "node eval/longmemeval_cortex.mjs"
   },
   "dependencies": {
     "@langchain/core": "^0.2.0",
