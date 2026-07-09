@@ -54,9 +54,24 @@ async function chatComplete(systemPrompt: string, userPrompt: string): Promise<s
   }
 
   const data = await res.json() as {
-    choices: Array<{ message: { content: string } }>
+    choices?: Array<{ message: { content: string | null } }>
+    error?: { message: string; code?: number | string }
   }
-  return data.choices?.[0]?.message?.content ?? ''
+
+  // OpenRouter free models sometimes return HTTP 200 with an error object in the body
+  // (e.g. "model output must contain either output text or tool calls")
+  if (data.error) {
+    throw new Error(`OpenRouter model error: ${data.error.message}`)
+  }
+
+  const content = data.choices?.[0]?.message?.content ?? ''
+
+  // Guard against empty output — treat as an error so callers can use their fallback
+  if (!content.trim()) {
+    throw new Error('OpenRouter returned empty content — model produced no output')
+  }
+
+  return content
 }
 
 /** Extrae el primer bloque JSON `{...}` de un string. */

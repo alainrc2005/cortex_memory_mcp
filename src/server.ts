@@ -17,7 +17,7 @@ import { observeGraph } from './graph/observe/workflow.js'
 import { runConsolidation } from './graph/consolidate/nodes.js'
 import { warmupEmbedding, getEmbedding, getSparseEmbedding, getEmbeddingBatch, getSparseEmbeddingBatch } from './services/fastembed.js'
 import { generateText, scoreAndTag, batchScoreAndTag, rerankWithLLM } from './services/llm.js'
-import { qdrant, searchCrossProject, searchHybridCrossProject, patchPayload, upsertEngrama, scrollAll, getOperatorProfile, saveOperatorProfile, listCortexCollections, deleteEngramas, deleteAllInProject, exportProject, upsertTemp, scrollTemp, searchTempByKeyword, deleteTempIds, ensureProjectCollection, TEMP_COLLECTION } from './services/qdrant.js'
+import { qdrant, searchCrossProject, searchHybridCrossProject, patchPayload, upsertEngrama, scrollAll, getOperatorProfile, saveOperatorProfile, listCortexCollections, deleteEngramas, deleteAllInProject, exportProject, upsertTemp, scrollTemp, searchTempByKeyword, deleteTempIds, ensureProjectCollection, findEngramaById, TEMP_COLLECTION } from './services/qdrant.js'
 import type { SearchHit, TempMemory } from './services/qdrant.js'
 import { calcDecay, combinedScore } from './services/decay.js'
 import { createEpisode, appendEvent, getOpenSession, closeEpisode, searchEpisodes, getRecentEpisodes, episodeCollectionFor } from './services/episode.js'
@@ -1095,8 +1095,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (name === 'delete_memory') {
     const id = args?.id as string
     if (!id) throw new Error('Parámetro requerido: id')
-    await deleteEngramas([id])
-    log('DELETE_MEMORY', { id })
+    const found = await findEngramaById(id)
+    if (!found) return errorResponse(`No se encontró ningún engrama con ID ${id}`)
+    await deleteEngramas([id], found.collection)
+    log('DELETE_MEMORY', { id, collection: found.collection })
     return { content: [{ type: 'text', text: `✅ Engrama ${id} eliminado.` }] }
   }
 
@@ -1105,23 +1107,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const id = args?.id as string
     const content = args?.content as string
     if (!id || !content) throw new Error('Parámetros requeridos: id, content')
-    const newEmbedding = await getEmbedding(content)
-    const scored = await scoreAndTag(content)
-    await patchPayload(id, {
-      content,
-      importance: scored.importance,
-      tags: scored.tags,
-      lastAccessed: Date.now(),
-    })
-    // Re-upsert con nuevo vector
-    await upsertEngrama(id, newEmbedding, {
+
+    const found = await findEngramaById(id)
+    if (!found) return errorResponse(`No se encontró ningún engrama con ID ${id}`)
+
+    const [newEmbedding, sparse, scored] = await Promise.all([
+      getEmbedding(content),
+      getSparseEmbedding(content).catch(() => undefined),
+      scoreAndTag(content),
+    ])
+
+    // Merge sobre el payload existente para no perder projectName, createdAt,
+    // accessCount, linkedTo, status, etc. al re-upsertear con el nuevo vector.
+    const merged = {
+      ...found.payload,
       content,
       importance: scored.importance,
       tags: scored.tags,
       type: scored.type,
       lastAccessed: Date.now(),
-    } as any)
-    log('UPDATE_MEMORY', { id, content: content.slice(0, 60) })
+    }
+
+    await upsertEngrama(id, newEmbedding, merged, found.collection, sparse)
+    log('UPDATE_MEMORY', { id, collection: found.collection, content: content.slice(0, 60) })
     return { content: [{ type: 'text', text: `✅ Engrama ${id} actualizado. Importancia: ${scored.importance}/10` }] }
   }
 

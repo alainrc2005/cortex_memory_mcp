@@ -392,6 +392,33 @@ export async function listCortexCollections(): Promise<string[]> {
     .filter(n => n.startsWith('cortex_'))
 }
 
+/**
+ * Localiza un engrama por su ID buscando en todas las colecciones cortex_*.
+ * Necesario para delete_memory / update_memory, que solo reciben el ID y no
+ * saben en qué colección (proyecto) vive el engrama.
+ * Devuelve la colección y su payload actual, o null si no existe.
+ */
+export async function findEngramaById(
+  id: string,
+): Promise<{ collection: string; payload: EngramaPayload } | null> {
+  const collections = await listCortexCollections()
+  for (const col of collections) {
+    try {
+      const result = await qdrant.retrieve(col, {
+        ids: [id],
+        with_payload: true,
+        with_vector: false,
+      })
+      if (result.length > 0) {
+        return { collection: col, payload: result[0].payload as unknown as EngramaPayload }
+      }
+    } catch {
+      // Colección inaccesible o inexistente — seguir con la siguiente
+    }
+  }
+  return null
+}
+
 // ─── Delete ───────────────────────────────────────────────────────────────────
 
 export async function deleteEngramas(ids: string[], collection?: string): Promise<void> {
